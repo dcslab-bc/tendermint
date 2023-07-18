@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 
-	"github.com/tendermint/tendermint/libs/log"
-	rs "github.com/tendermint/tendermint/rpc/jsonrpc/server"
-	types "github.com/tendermint/tendermint/rpc/jsonrpc/types"
+	"github.com/Finschia/ostracon/libs/log"
+	rs "github.com/Finschia/ostracon/rpc/jsonrpc/server"
+	types "github.com/Finschia/ostracon/rpc/jsonrpc/types"
 )
 
 var rpcFuncMap = map[string]*rs.RPCFunc{
@@ -20,7 +20,7 @@ var mux *http.ServeMux
 func init() {
 	mux := http.NewServeMux()
 	buf := new(bytes.Buffer)
-	lgr := log.NewTMLogger(buf)
+	lgr := log.NewOCLogger(buf)
 	rs.RegisterRPCFuncs(mux, rpcFuncMap, lgr)
 }
 

@@ -12,8 +12,8 @@ import (
 	"io"
 	"os"
 
-	cs "github.com/tendermint/tendermint/consensus"
-	tmjson "github.com/tendermint/tendermint/libs/json"
+	cs "github.com/Finschia/ostracon/consensus"
+	tmjson "github.com/Finschia/ostracon/libs/json"
 )
 
 func main() {

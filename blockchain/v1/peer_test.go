@@ -8,10 +8,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/libs/log"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
-	"github.com/tendermint/tendermint/p2p"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/libs/log"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
+	"github.com/Finschia/ostracon/p2p"
+	sm "github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/types"
 )
 
 func TestPeerMonitor(t *testing.T) {
@@ -276,5 +277,5 @@ func checkByStoppingPeerTimer(t *testing.T, peer *BpPeer, running bool) {
 }
 
 func makeSmallBlock(height int) *types.Block {
-	return types.MakeBlock(int64(height), []types.Tx{types.Tx("foo")}, nil, nil)
+	return types.MakeBlock(int64(height), []types.Tx{types.Tx("foo")}, nil, nil, sm.InitStateVersion.Consensus)
 }

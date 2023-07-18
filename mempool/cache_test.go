@@ -7,10 +7,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/abci/example/kvstore"
-	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/proxy"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/abci/example/kvstore"
+	abci "github.com/Finschia/ostracon/abci/types"
+	"github.com/Finschia/ostracon/proxy"
+	"github.com/Finschia/ostracon/types"
 )
 
 func TestCacheRemove(t *testing.T) {
@@ -59,7 +59,7 @@ func TestCacheAfterUpdate(t *testing.T) {
 	for tcIndex, tc := range tests {
 		for i := 0; i < tc.numTxsToCreate; i++ {
 			tx := types.Tx{byte(i)}
-			err := mempool.CheckTx(tx, nil, TxInfo{})
+			_, err := mempool.CheckTxSync(tx, TxInfo{})
 			require.NoError(t, err)
 		}
 
@@ -68,12 +68,13 @@ func TestCacheAfterUpdate(t *testing.T) {
 			tx := types.Tx{byte(v)}
 			updateTxs = append(updateTxs, tx)
 		}
-		err := mempool.Update(int64(tcIndex), updateTxs, abciResponses(len(updateTxs), abci.CodeTypeOK), nil, nil)
+		err := mempool.Update(newTestBlock(int64(tcIndex), updateTxs),
+			abciResponses(len(updateTxs), abci.CodeTypeOK), nil, nil)
 		require.NoError(t, err)
 
 		for _, v := range tc.reAddIndices {
 			tx := types.Tx{byte(v)}
-			_ = mempool.CheckTx(tx, nil, TxInfo{})
+			_, _ = mempool.CheckTxSync(tx, TxInfo{})
 		}
 
 		cache := mempool.cache.(*mapTxCache)

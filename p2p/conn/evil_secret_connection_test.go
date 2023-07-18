@@ -9,13 +9,13 @@ import (
 	gogotypes "github.com/gogo/protobuf/types"
 	"github.com/gtank/merlin"
 	"github.com/stretchr/testify/assert"
+	tmp2p "github.com/tendermint/tendermint/proto/tendermint/p2p"
 	"golang.org/x/crypto/chacha20poly1305"
 
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	cryptoenc "github.com/tendermint/tendermint/crypto/encoding"
-	"github.com/tendermint/tendermint/libs/protoio"
-	tmp2p "github.com/tendermint/tendermint/proto/tendermint/p2p"
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/crypto/ed25519"
+	cryptoenc "github.com/Finschia/ostracon/crypto/encoding"
+	"github.com/Finschia/ostracon/libs/protoio"
 )
 
 type buffer struct {

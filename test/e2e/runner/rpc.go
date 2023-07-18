@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"time"
 
-	rpchttp "github.com/tendermint/tendermint/rpc/client/http"
-	rpctypes "github.com/tendermint/tendermint/rpc/core/types"
-	e2e "github.com/tendermint/tendermint/test/e2e/pkg"
-	"github.com/tendermint/tendermint/types"
+	rpchttp "github.com/Finschia/ostracon/rpc/client/http"
+	rpctypes "github.com/Finschia/ostracon/rpc/core/types"
+	e2e "github.com/Finschia/ostracon/test/e2e/pkg"
+	"github.com/Finschia/ostracon/types"
 )
 
 // waitForHeight waits for the network to reach a certain height (or above),
@@ -84,24 +84,28 @@ func waitForNode(node *e2e.Node, height int64, timeout time.Duration) (*rpctypes
 			return status, nil
 		}
 
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
 	}
 }
 
 // waitForAllNodes waits for all nodes to become available and catch up to the given block height.
 func waitForAllNodes(testnet *e2e.Testnet, height int64, timeout time.Duration) (int64, error) {
-	lastHeight := int64(0)
+	var lastHeight int64
+
 	for _, node := range testnet.Nodes {
 		if node.Mode == e2e.ModeSeed {
 			continue
 		}
-		status, err := waitForNode(node, height, 20*time.Second)
+
+		status, err := waitForNode(node, height, timeout)
 		if err != nil {
 			return 0, err
 		}
+
 		if status.SyncInfo.LatestBlockHeight > lastHeight {
 			lastHeight = status.SyncInfo.LatestBlockHeight
 		}
 	}
+
 	return lastHeight, nil
 }

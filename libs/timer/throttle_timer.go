@@ -3,7 +3,7 @@ package timer
 import (
 	"time"
 
-	tmsync "github.com/tendermint/tendermint/libs/sync"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
 )
 
 /*

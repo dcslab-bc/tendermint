@@ -7,11 +7,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/tendermint/tendermint/libs/log"
-	tmmath "github.com/tendermint/tendermint/libs/math"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
-	"github.com/tendermint/tendermint/p2p"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/libs/log"
+	tmmath "github.com/Finschia/ostracon/libs/math"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
+	"github.com/Finschia/ostracon/p2p"
+	sm "github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/types"
 )
 
 type lastBlockRequestT struct {
@@ -142,7 +143,7 @@ func sBlockRespEv(current, expected string, peerID p2p.ID, height int64, prevBlo
 		data: bReactorEventData{
 			peerID: peerID,
 			height: height,
-			block:  types.MakeBlock(height, txs, nil, nil),
+			block:  types.MakeBlock(height, txs, nil, nil, sm.InitStateVersion.Consensus),
 			length: 100},
 		wantState:     expected,
 		wantNewBlocks: append(prevBlocks, height),
@@ -159,7 +160,7 @@ func sBlockRespEvErrored(current, expected string,
 		data: bReactorEventData{
 			peerID: peerID,
 			height: height,
-			block:  types.MakeBlock(height, txs, nil, nil),
+			block:  types.MakeBlock(height, txs, nil, nil, sm.InitStateVersion.Consensus),
 			length: 100},
 		wantState:        expected,
 		wantErr:          wantErr,

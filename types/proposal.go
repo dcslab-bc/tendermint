@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	tmbytes "github.com/tendermint/tendermint/libs/bytes"
-	"github.com/tendermint/tendermint/libs/protoio"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	tmtime "github.com/tendermint/tendermint/types/time"
+
+	tmbytes "github.com/Finschia/ostracon/libs/bytes"
+	"github.com/Finschia/ostracon/libs/protoio"
+	tmtime "github.com/Finschia/ostracon/types/time"
 )
 
 var (
@@ -74,7 +75,7 @@ func (p *Proposal) ValidateBasic() error {
 	}
 
 	if len(p.Signature) > MaxSignatureSize {
-		return fmt.Errorf("signature is too big (max: %d)", MaxSignatureSize)
+		return fmt.Errorf("signature is too big %d (max: %d)", len(p.Signature), MaxSignatureSize)
 	}
 	return nil
 }

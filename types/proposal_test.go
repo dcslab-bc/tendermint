@@ -9,10 +9,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/crypto/tmhash"
-	"github.com/tendermint/tendermint/libs/protoio"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
+
+	"github.com/Finschia/ostracon/crypto/tmhash"
+	"github.com/Finschia/ostracon/libs/protoio"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
 )
 
 var (
@@ -100,7 +101,11 @@ func BenchmarkProposalWriteSignBytes(b *testing.B) {
 	}
 }
 
-func BenchmarkProposalSign(b *testing.B) {
+func BenchmarkProposalSignEd25519(b *testing.B) {
+	benchmarkProposalSign(b)
+}
+
+func benchmarkProposalSign(b *testing.B) {
 	privVal := NewMockPV()
 	for i := 0; i < b.N; i++ {
 		err := privVal.SignProposal("test_chain_id", pbp)
@@ -110,13 +115,18 @@ func BenchmarkProposalSign(b *testing.B) {
 	}
 }
 
-func BenchmarkProposalVerifySignature(b *testing.B) {
+func BenchmarkProposalVerifySignatureEd25519(b *testing.B) {
+	benchmarkProposalVerifySignature(b)
+}
+
+func benchmarkProposalVerifySignature(b *testing.B) {
 	privVal := NewMockPV()
 	err := privVal.SignProposal("test_chain_id", pbp)
 	require.NoError(b, err)
 	pubKey, err := privVal.GetPubKey()
 	require.NoError(b, err)
 
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		pubKey.VerifySignature(ProposalSignBytes("test_chain_id", pbp), testProposal.Signature)
 	}

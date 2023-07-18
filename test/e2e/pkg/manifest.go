@@ -3,6 +3,7 @@ package e2e
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -50,32 +51,51 @@ type Manifest struct {
 	// KeyType sets the curve that will be used by validators.
 	// Options are ed25519 & secp256k1
 	KeyType string `toml:"key_type"`
+
+	// ABCIProtocol specifies the protocol used to communicate with the ABCI
+	// application: "unix", "tcp", "grpc", or "builtin". Defaults to builtin.
+	// builtin will build a complete Ostracon node into the application and
+	// launch it instead of launching a separate Ostracon process.
+	ABCIProtocol string `toml:"abci_protocol"`
+
+	// Add artificial delays to each of the main ABCI calls to mimic computation time
+	// of the application
+	PrepareProposalDelay time.Duration `toml:"prepare_proposal_delay"`
+	ProcessProposalDelay time.Duration `toml:"process_proposal_delay"`
+	CheckTxDelay         time.Duration `toml:"check_tx_delay"`
+	// TODO: add vote extension and finalize block delay (@cmwaters)
+
+	LoadTxSizeBytes   int `toml:"load_tx_size_bytes"`
+	LoadTxBatchSize   int `toml:"load_tx_batch_size"`
+	LoadTxConnections int `toml:"load_tx_connections"`
 }
 
 // ManifestNode represents a node in a testnet manifest.
 type ManifestNode struct {
-	// Mode specifies the type of node: "validator", "full", or "seed". Defaults to
-	// "validator". Full nodes do not get a signing key (a dummy key is generated),
-	// and seed nodes run in seed mode with the PEX reactor enabled.
+	// Mode specifies the type of node: "validator", "full", "light" or "seed".
+	// Defaults to "validator". Full nodes do not get a signing key (a dummy key
+	// is generated), and seed nodes run in seed mode with the PEX reactor enabled.
 	Mode string `toml:"mode"`
+
+	// Version specifies which version of Ostracon this node is. Specifying different
+	// versions for different nodes allows for testing the interaction of different
+	// node's compatibility. Note that in order to use a node at a particular version,
+	// there must be a docker image of the test app tagged with this version present
+	// on the machine where the test is being run.
+	Version string `toml:"version"`
 
 	// Seeds is the list of node names to use as P2P seed nodes. Defaults to none.
 	Seeds []string `toml:"seeds"`
 
 	// PersistentPeers is a list of node names to maintain persistent P2P
 	// connections to. If neither seeds nor persistent peers are specified,
-	// this defaults to all other nodes in the network.
+	// this defaults to all other nodes in the network. For light clients,
+	// this relates to the providers the light client is connected to.
 	PersistentPeers []string `toml:"persistent_peers"`
 
 	// Database specifies the database backend: "goleveldb", "cleveldb",
 	// "rocksdb", "boltdb", or "badgerdb". Defaults to goleveldb.
 	Database string `toml:"database"`
-
-	// ABCIProtocol specifies the protocol used to communicate with the ABCI
-	// application: "unix", "tcp", "grpc", or "builtin". Defaults to unix.
-	// builtin will build a complete Tendermint node into the application and
-	// launch it instead of launching a separate Tendermint process.
-	ABCIProtocol string `toml:"abci_protocol"`
 
 	// PrivvalProtocol specifies the protocol used to sign consensus messages:
 	// "file", "unix", or "tcp". Defaults to "file". For unix and tcp, the ABCI
@@ -120,15 +140,10 @@ type ManifestNode struct {
 	// restart:    restarts the node, shutting it down with SIGTERM
 	Perturb []string `toml:"perturb"`
 
-	// Misbehaviors sets how a validator behaves during consensus at a
-	// certain height. Multiple misbehaviors at different heights can be used
-	//
-	// An example of misbehaviors
-	//    { 10 = "double-prevote", 20 = "double-prevote"}
-	//
-	// For more information, look at the readme in the maverick folder.
-	// A list of all behaviors can be found in ../maverick/consensus/behavior.go
-	Misbehaviors map[string]string `toml:"misbehaviors"`
+	// SendNoLoad determines if the e2e test should send load to this node.
+	// It defaults to false so unless the configured, the node will
+	// receive load.
+	SendNoLoad bool `toml:"send_no_load"`
 }
 
 // Save saves the testnet manifest to a file.

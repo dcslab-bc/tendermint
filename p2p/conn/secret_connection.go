@@ -16,18 +16,18 @@ import (
 	gogotypes "github.com/gogo/protobuf/types"
 	"github.com/gtank/merlin"
 	pool "github.com/libp2p/go-buffer-pool"
+	tmp2p "github.com/tendermint/tendermint/proto/tendermint/p2p"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/hkdf"
 	"golang.org/x/crypto/nacl/box"
 
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	cryptoenc "github.com/tendermint/tendermint/crypto/encoding"
-	"github.com/tendermint/tendermint/libs/async"
-	"github.com/tendermint/tendermint/libs/protoio"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
-	tmp2p "github.com/tendermint/tendermint/proto/tendermint/p2p"
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/crypto/ed25519"
+	cryptoenc "github.com/Finschia/ostracon/crypto/encoding"
+	"github.com/Finschia/ostracon/libs/async"
+	"github.com/Finschia/ostracon/libs/protoio"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
 )
 
 // 4 + 1024 == 1028 total frame size
@@ -275,7 +275,6 @@ func (sc *SecretConnection) Read(data []byte) (n int, err error) {
 }
 
 // Implements net.Conn
-// nolint
 func (sc *SecretConnection) Close() error                  { return sc.conn.Close() }
 func (sc *SecretConnection) LocalAddr() net.Addr           { return sc.conn.(net.Conn).LocalAddr() }
 func (sc *SecretConnection) RemoteAddr() net.Addr          { return sc.conn.(net.Conn).RemoteAddr() }
@@ -390,11 +389,7 @@ func sort32(foo, bar *[32]byte) (lo, hi *[32]byte) {
 }
 
 func signChallenge(challenge *[32]byte, locPrivKey crypto.PrivKey) ([]byte, error) {
-	signature, err := locPrivKey.Sign(challenge[:])
-	if err != nil {
-		return nil, err
-	}
-	return signature, nil
+	return locPrivKey.Sign(challenge[:])
 }
 
 type authSigMessage struct {
@@ -424,7 +419,7 @@ func shareAuthSignature(sc io.ReadWriter, pubKey crypto.PubKey, signature []byte
 				return nil, true, err // abort
 			}
 
-			pk, err := cryptoenc.PubKeyFromProto(pba.PubKey)
+			pk, err := cryptoenc.PubKeyFromProto(&pba.PubKey)
 			if err != nil {
 				return nil, true, err // abort
 			}

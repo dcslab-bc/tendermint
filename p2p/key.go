@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
-	"io/ioutil"
+	"os"
 
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	tmjson "github.com/tendermint/tendermint/libs/json"
-	tmos "github.com/tendermint/tendermint/libs/os"
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/crypto/ed25519"
+	tmjson "github.com/Finschia/ostracon/libs/json"
+	tmos "github.com/Finschia/ostracon/libs/os"
 )
 
 // ID is a hex-encoded crypto.Address
@@ -70,7 +70,7 @@ func LoadOrGenNodeKey(filePath string) (*NodeKey, error) {
 
 // LoadNodeKey loads NodeKey located in filePath.
 func LoadNodeKey(filePath string) (*NodeKey, error) {
-	jsonBytes, err := ioutil.ReadFile(filePath)
+	jsonBytes, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +88,7 @@ func (nodeKey *NodeKey) SaveAs(filePath string) error {
 	if err != nil {
 		return err
 	}
-	err = ioutil.WriteFile(filePath, jsonBytes, 0600)
+	err = os.WriteFile(filePath, jsonBytes, 0600)
 	if err != nil {
 		return err
 	}

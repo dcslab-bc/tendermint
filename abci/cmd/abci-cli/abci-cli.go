@@ -2,27 +2,32 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/tendermint/tendermint/libs/log"
-	tmos "github.com/tendermint/tendermint/libs/os"
-
-	abcicli "github.com/tendermint/tendermint/abci/client"
-	"github.com/tendermint/tendermint/abci/example/code"
-	"github.com/tendermint/tendermint/abci/example/counter"
-	"github.com/tendermint/tendermint/abci/example/kvstore"
-	"github.com/tendermint/tendermint/abci/server"
-	servertest "github.com/tendermint/tendermint/abci/tests/server"
 	"github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/abci/version"
 	"github.com/tendermint/tendermint/proto/tendermint/crypto"
+
+	abcicli "github.com/Finschia/ostracon/abci/client"
+	"github.com/Finschia/ostracon/abci/example/code"
+	"github.com/Finschia/ostracon/abci/example/counter"
+	"github.com/Finschia/ostracon/abci/example/kvstore"
+	"github.com/Finschia/ostracon/abci/server"
+	servertest "github.com/Finschia/ostracon/abci/tests/server"
+	ocabci "github.com/Finschia/ostracon/abci/types"
+	"github.com/Finschia/ostracon/abci/version"
+	"github.com/Finschia/ostracon/config"
+	"github.com/Finschia/ostracon/crypto/encoding"
+	"github.com/Finschia/ostracon/libs/log"
+	tmos "github.com/Finschia/ostracon/libs/os"
 )
 
 // client is a global variable so it can be reused by the console
@@ -49,6 +54,9 @@ var (
 
 	// kvstore
 	flagPersist string
+
+	// voting power for make validator_tx
+	flagVotingPower int64
 )
 
 var RootCmd = &cobra.Command{
@@ -69,7 +77,7 @@ var RootCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			logger = log.NewFilter(log.NewTMLogger(log.NewSyncWriter(os.Stdout)), allowLevel)
+			logger = log.NewFilter(log.NewOCLogger(log.NewSyncWriter(os.Stdout)), allowLevel)
 		}
 		if client == nil {
 			var err error
@@ -136,11 +144,18 @@ func addQueryFlags() {
 }
 
 func addCounterFlags() {
-	counterCmd.PersistentFlags().BoolVarP(&flagSerial, "serial", "", false, "enforce incrementing (serial) transactions")
+	counterCmd.PersistentFlags().BoolVarP(&flagSerial, "serial", "", false,
+		"enforce incrementing (serial) transactions")
 }
 
 func addKVStoreFlags() {
-	kvstoreCmd.PersistentFlags().StringVarP(&flagPersist, "persist", "", "", "directory to use for a database")
+	kvstoreCmd.PersistentFlags().StringVarP(&flagPersist, "persist", "", "",
+		"directory to use for a database")
+}
+
+func addPersistKVStoreMakeValSetChangeTxFlags() {
+	kvstoreCmd.PersistentFlags().Int64VarP(&flagVotingPower, "voting_power", "p", int64(10),
+		"voting power for ValSetChangeTx")
 }
 
 func addCommands() {
@@ -162,6 +177,10 @@ func addCommands() {
 	RootCmd.AddCommand(counterCmd)
 	addKVStoreFlags()
 	RootCmd.AddCommand(kvstoreCmd)
+
+	// for examples of persist_kvstore
+	addPersistKVStoreMakeValSetChangeTxFlags()
+	RootCmd.AddCommand(persistKvstoreMakeValSetChangeTxCmd)
 }
 
 var batchCmd = &cobra.Command{
@@ -269,18 +288,26 @@ var queryCmd = &cobra.Command{
 
 var counterCmd = &cobra.Command{
 	Use:   "counter",
-	Short: "ABCI demo example",
-	Long:  "ABCI demo example",
+	Short: "ABCI demo example - counter",
+	Long:  "ABCI demo example - counter",
 	Args:  cobra.ExactArgs(0),
 	RunE:  cmdCounter,
 }
 
 var kvstoreCmd = &cobra.Command{
 	Use:   "kvstore",
-	Short: "ABCI demo example",
-	Long:  "ABCI demo example",
+	Short: "ABCI demo example - kvstore",
+	Long:  "ABCI demo example - kvstore",
 	Args:  cobra.ExactArgs(0),
 	RunE:  cmdKVStore,
+}
+
+var persistKvstoreMakeValSetChangeTxCmd = &cobra.Command{
+	Use:   "valset_change_tx",
+	Short: "persist_kvstore - make ValSetChangeTx",
+	Long:  "persist_kvstore - make ValSetChangeTx",
+	Args:  cobra.ExactArgs(0),
+	RunE:  cmdPersistKVStoreMakeValSetChangeTx,
 }
 
 var testCmd = &cobra.Command{
@@ -627,7 +654,7 @@ func cmdQuery(cmd *cobra.Command, args []string) error {
 
 func cmdCounter(cmd *cobra.Command, args []string) error {
 	app := counter.NewApplication(flagSerial)
-	logger := log.NewTMLogger(log.NewSyncWriter(os.Stdout))
+	logger := log.NewOCLogger(log.NewSyncWriter(os.Stdout))
 
 	// Start the listener
 	srv, err := server.NewServer(flagAddress, flagAbci, app)
@@ -652,10 +679,10 @@ func cmdCounter(cmd *cobra.Command, args []string) error {
 }
 
 func cmdKVStore(cmd *cobra.Command, args []string) error {
-	logger := log.NewTMLogger(log.NewSyncWriter(os.Stdout))
+	logger := log.NewOCLogger(log.NewSyncWriter(os.Stdout))
 
 	// Create the application - in memory or persisted to disk
-	var app types.Application
+	var app ocabci.Application
 	if flagPersist == "" {
 		app = kvstore.NewApplication()
 	} else {
@@ -685,6 +712,61 @@ func cmdKVStore(cmd *cobra.Command, args []string) error {
 	select {}
 }
 
+func cmdPersistKVStoreMakeValSetChangeTx(cmd *cobra.Command, args []string) error {
+	c := config.DefaultConfig()
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		panic(err)
+	}
+	c.SetRoot(filepath.Join(userHome, config.DefaultOstraconDir))
+	keyFilePath := c.PrivValidatorKeyFile()
+	if !tmos.FileExists(keyFilePath) {
+		return fmt.Errorf("private validator file %s does not exist", keyFilePath)
+	}
+	keyFile, err := kvstore.LoadPrivValidatorKeyFile(keyFilePath)
+	if err != nil {
+		panic(err)
+	}
+	publicKey, err := encoding.PubKeyToProto(keyFile.PubKey)
+	if err != nil {
+		panic(err)
+	}
+	pubStr, tx := kvstore.MakeValSetChangeTxAndMore(publicKey, flagVotingPower)
+	{
+		fmt.Printf("DeliverTxSync: data=%s, tx=%s\n", pubStr, tx)
+		res, err := client.DeliverTxSync(types.RequestDeliverTx{Tx: []byte(tx)})
+		if err != nil {
+			return err
+		}
+		printResponse(cmd, args, response{
+			Code: res.Code,
+			Data: res.Data,
+			Info: res.Info,
+			Log:  res.Log,
+		})
+	}
+	{
+		fmt.Printf("QuerySync: data=%s\n", pubStr)
+		res, err := client.QuerySync(types.RequestQuery{Path: "/val", Data: []byte(pubStr)})
+		if err != nil {
+			return err
+		}
+		printResponse(cmd, args, response{
+			Code: res.Code,
+			Info: res.Info,
+			Log:  res.Log,
+		})
+		fmt.Printf("original:publicKey:%s\n", publicKey)
+		validatorUpdate := types.ValidatorUpdate{}
+		err = ocabci.ReadMessage(bytes.NewReader(res.Value), &validatorUpdate)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Printf("saved   :publicKey:%s\n", validatorUpdate.PubKey)
+	}
+	return nil
+}
+
 //--------------------------------------------------------------------------------
 
 func printResponse(cmd *cobra.Command, args []string, rsp response) {
@@ -694,7 +776,7 @@ func printResponse(cmd *cobra.Command, args []string, rsp response) {
 	}
 
 	// Always print the status code.
-	if rsp.Code == types.CodeTypeOK {
+	if rsp.Code == ocabci.CodeTypeOK {
 		fmt.Printf("-> code: OK\n")
 	} else {
 		fmt.Printf("-> code: %d\n", rsp.Code)
@@ -702,7 +784,7 @@ func printResponse(cmd *cobra.Command, args []string, rsp response) {
 	}
 
 	if len(rsp.Data) != 0 {
-		// Do no print this line when using the commit command
+		// Do not print this line when using the commit command
 		// because the string comes out as gibberish
 		if cmd.Use != "commit" {
 			fmt.Printf("-> data: %s\n", rsp.Data)

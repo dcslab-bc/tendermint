@@ -1,6 +1,7 @@
 package state_test
 
 import (
+	"bytes"
 	"testing"
 	"time"
 
@@ -9,15 +10,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	"github.com/tendermint/tendermint/crypto/tmhash"
-	"github.com/tendermint/tendermint/libs/log"
-	memmock "github.com/tendermint/tendermint/mempool/mock"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/state/mocks"
-	"github.com/tendermint/tendermint/types"
-	tmtime "github.com/tendermint/tendermint/types/time"
+
+	"github.com/Finschia/ostracon/crypto/ed25519"
+	"github.com/Finschia/ostracon/crypto/tmhash"
+	"github.com/Finschia/ostracon/libs/log"
+	memmock "github.com/Finschia/ostracon/mempool/mock"
+	sm "github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/state/mocks"
+	"github.com/Finschia/ostracon/types"
+	tmtime "github.com/Finschia/ostracon/types/time"
 )
 
 const validationTestsStopHeight int64 = 10
@@ -44,6 +46,7 @@ func TestValidateBlockHeader(t *testing.T) {
 	wrongVersion1.Block += 2
 	wrongVersion2 := state.Version.Consensus
 	wrongVersion2.App += 2
+	var wrongProposer *types.Validator
 
 	// Manipulation of any header field causes failure.
 	testCases := []struct {
@@ -67,20 +70,30 @@ func TestValidateBlockHeader(t *testing.T) {
 		{"LastResultsHash wrong", func(block *types.Block) { block.LastResultsHash = wrongHash }},
 
 		{"EvidenceHash wrong", func(block *types.Block) { block.EvidenceHash = wrongHash }},
-		{"Proposer wrong", func(block *types.Block) { block.ProposerAddress = ed25519.GenPrivKey().PubKey().Address() }},
-		{"Proposer invalid", func(block *types.Block) { block.ProposerAddress = []byte("wrong size") }},
+
+		{"Invalid ProposerAddress size", func(block *types.Block) { block.ProposerAddress = []byte("wrong size") }},
+		{"ProposerAddress not known as validator", func(block *types.Block) { block.ProposerAddress = ed25519.GenPrivKey().PubKey().Address() }},
+		{"Not ProposerAddress for round", func(block *types.Block) { block.ProposerAddress = wrongProposer.Address }},
 	}
 
 	// Build up state for multiple heights
 	for height := int64(1); height < validationTestsStopHeight; height++ {
-		proposerAddr := state.Validators.GetProposer().Address
+		proposerAddr := state.Validators.SelectProposer(state.LastProofHash, height, 0).Address
+		for _, v := range state.Validators.Validators {
+			if !bytes.Equal(proposerAddr, v.Address) {
+				wrongProposer = v.Copy()
+				break
+			}
+		}
 		/*
 			Invalid blocks don't pass
 		*/
 		for _, tc := range testCases {
-			block, _ := state.MakeBlock(height, makeTxs(height), lastCommit, nil, proposerAddr)
+			message := state.MakeHashMessage(0)
+			proof, _ := privVals[proposerAddr.String()].GenerateVRFProof(message)
+			block, _ := state.MakeBlock(height, makeTxs(height), lastCommit, nil, proposerAddr, 0, proof)
 			tc.malleateBlock(block)
-			err := blockExec.ValidateBlock(state, block)
+			err := blockExec.ValidateBlock(state, 0, block)
 			require.Error(t, err, tc.name)
 		}
 
@@ -112,7 +125,7 @@ func TestValidateBlockCommit(t *testing.T) {
 	badPrivVal := types.NewMockPV()
 
 	for height := int64(1); height < validationTestsStopHeight; height++ {
-		proposerAddr := state.Validators.GetProposer().Address
+		proposerAddr := state.Validators.SelectProposer([]byte{}, height, 0).Address
 		if height > 1 {
 			/*
 				#2589: ensure state.LastValidators.VerifyCommit fails here
@@ -133,16 +146,18 @@ func TestValidateBlockCommit(t *testing.T) {
 				state.LastBlockID,
 				[]types.CommitSig{wrongHeightVote.CommitSig()},
 			)
-			block, _ := state.MakeBlock(height, makeTxs(height), wrongHeightCommit, nil, proposerAddr)
-			err = blockExec.ValidateBlock(state, block)
+			message := state.MakeHashMessage(0)
+			proof, _ := privVals[proposerAddr.String()].GenerateVRFProof(message)
+			block, _ := state.MakeBlock(height, makeTxs(height), wrongHeightCommit, nil, proposerAddr, 0, proof)
+			err = blockExec.ValidateBlock(state, 0, block)
 			_, isErrInvalidCommitHeight := err.(types.ErrInvalidCommitHeight)
 			require.True(t, isErrInvalidCommitHeight, "expected ErrInvalidCommitHeight at height %d but got: %v", height, err)
 
 			/*
 				#2589: test len(block.LastCommit.Signatures) == state.LastValidators.Size()
 			*/
-			block, _ = state.MakeBlock(height, makeTxs(height), wrongSigsCommit, nil, proposerAddr)
-			err = blockExec.ValidateBlock(state, block)
+			block, _ = state.MakeBlock(height, makeTxs(height), wrongSigsCommit, nil, proposerAddr, 0, proof)
+			err = blockExec.ValidateBlock(state, 0, block)
 			_, isErrInvalidCommitSignatures := err.(types.ErrInvalidCommitSignatures)
 			require.True(t, isErrInvalidCommitSignatures,
 				"expected ErrInvalidCommitSignatures at height %d, but got: %v",
@@ -233,14 +248,14 @@ func TestValidateBlockEvidence(t *testing.T) {
 	lastCommit := types.NewCommit(0, 0, types.BlockID{}, nil)
 
 	for height := int64(1); height < validationTestsStopHeight; height++ {
-		proposerAddr := state.Validators.GetProposer().Address
+		proposerAddr := state.Validators.SelectProposer(state.LastProofHash, height, 0).Address
 		maxBytesEvidence := state.ConsensusParams.Evidence.MaxBytes
 		if height > 1 {
 			/*
 				A block with too much evidence fails
 			*/
 			evidence := make([]types.Evidence, 0)
-			var currentBytes int64 = 0
+			var currentBytes int64
 			// more bytes than the maximum allowed for evidence
 			for currentBytes <= maxBytesEvidence {
 				newEv := types.NewMockDuplicateVoteEvidenceWithValidator(height, time.Now(),
@@ -248,8 +263,10 @@ func TestValidateBlockEvidence(t *testing.T) {
 				evidence = append(evidence, newEv)
 				currentBytes += int64(len(newEv.Bytes()))
 			}
-			block, _ := state.MakeBlock(height, makeTxs(height), lastCommit, evidence, proposerAddr)
-			err := blockExec.ValidateBlock(state, block)
+			message := state.MakeHashMessage(0)
+			proof, _ := privVals[proposerAddr.String()].GenerateVRFProof(message)
+			block, _ := state.MakeBlock(height, makeTxs(height), lastCommit, evidence, proposerAddr, 0, proof)
+			err := blockExec.ValidateBlock(state, 0, block)
 			if assert.Error(t, err) {
 				_, ok := err.(*types.ErrEvidenceOverflow)
 				require.True(t, ok, "expected error to be of type ErrEvidenceOverflow at height %d but got %v", height, err)
@@ -260,7 +277,7 @@ func TestValidateBlockEvidence(t *testing.T) {
 			A good block with several pieces of good evidence passes
 		*/
 		evidence := make([]types.Evidence, 0)
-		var currentBytes int64 = 0
+		var currentBytes int64
 		// precisely the amount of allowed evidence
 		for {
 			newEv := types.NewMockDuplicateVoteEvidenceWithValidator(height, defaultEvidenceTime,
@@ -282,6 +299,59 @@ func TestValidateBlockEvidence(t *testing.T) {
 			privVals,
 			evidence,
 		)
+		require.NoError(t, err, "height %d", height)
+	}
+}
+
+func TestValidateBlockEntropy(t *testing.T) {
+	proxyApp := newTestApp()
+	require.NoError(t, proxyApp.Start())
+	defer proxyApp.Stop() //nolint:errcheck // ignore for tests
+
+	state, stateDB, privVals := makeState(3, 1)
+	stateStore := sm.NewStore(stateDB)
+	blockExec := sm.NewBlockExecutor(
+		stateStore,
+		log.TestingLogger(),
+		proxyApp.Consensus(),
+		memmock.Mempool{},
+		sm.EmptyEvidencePool{},
+	)
+	lastCommit := types.NewCommit(0, 0, types.BlockID{}, nil)
+
+	// some bad values
+	wrongRound := int32(999)
+	wrongProof := []byte("wrong size")
+
+	// Manipulation of any header field causes failure.
+	testCases := []struct {
+		name          string
+		malleateBlock func(block *types.Block)
+	}{
+		{"Round wrong", func(block *types.Block) { block.Round = wrongRound }},
+		{"Proof wrong", func(block *types.Block) { block.Proof = wrongProof }},
+	}
+
+	// Build up state for multiple heights
+	for height := int64(1); height < validationTestsStopHeight; height++ {
+		proposerAddr := state.Validators.SelectProposer(state.LastProofHash, height, 0).Address
+		/*
+			Invalid blocks don't pass
+		*/
+		for _, tc := range testCases {
+			message := state.MakeHashMessage(0)
+			proof, _ := privVals[proposerAddr.String()].GenerateVRFProof(message)
+			block, _ := state.MakeBlock(height, makeTxs(height), lastCommit, nil, proposerAddr, 0, proof)
+			tc.malleateBlock(block)
+			err := blockExec.ValidateBlock(state, 0, block)
+			require.Error(t, err, tc.name)
+		}
+
+		/*
+			A good block passes
+		*/
+		var err error
+		state, _, lastCommit, err = makeAndCommitGoodBlock(state, height, lastCommit, proposerAddr, blockExec, privVals, nil)
 		require.NoError(t, err, "height %d", height)
 	}
 }

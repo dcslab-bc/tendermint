@@ -10,10 +10,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/libs/log"
+	"github.com/Finschia/ostracon/libs/log"
 
-	"github.com/tendermint/tendermint/libs/pubsub"
-	"github.com/tendermint/tendermint/libs/pubsub/query"
+	"github.com/Finschia/ostracon/libs/pubsub"
+	"github.com/Finschia/ostracon/libs/pubsub/query"
 )
 
 const (
@@ -444,7 +444,7 @@ func benchmarkNClients(n int, b *testing.B) {
 		err = s.PublishWithEvents(
 			ctx,
 			"Gamora",
-			map[string][]string{"abci.Account.Owner": {"Ivan"}, "abci.Invoices.Number": {string(rune(i))}},
+			map[string][]string{"abci.Account.Owner": {"Ivan"}, "abci.Invoices.Number": {fmt.Sprint(i)}},
 		)
 		require.NoError(b, err)
 	}

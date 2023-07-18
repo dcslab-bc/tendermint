@@ -1,4 +1,3 @@
-// nolint: gosec
 package main
 
 import (
@@ -7,24 +6,24 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
-	"text/template"
 	"time"
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/tendermint/tendermint/config"
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	"github.com/tendermint/tendermint/p2p"
-	"github.com/tendermint/tendermint/privval"
-	e2e "github.com/tendermint/tendermint/test/e2e/pkg"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/config"
+	"github.com/Finschia/ostracon/crypto/ed25519"
+	cryptoenc "github.com/Finschia/ostracon/crypto/encoding"
+	"github.com/Finschia/ostracon/libs/log"
+	"github.com/Finschia/ostracon/p2p"
+	"github.com/Finschia/ostracon/privval"
+	e2e "github.com/Finschia/ostracon/test/e2e/pkg"
+	"github.com/Finschia/ostracon/test/e2e/pkg/infra"
+	"github.com/Finschia/ostracon/types"
 )
 
 const (
@@ -40,19 +39,15 @@ const (
 )
 
 // Setup sets up the testnet configuration.
-func Setup(testnet *e2e.Testnet) error {
-	logger.Info(fmt.Sprintf("Generating testnet files in %q", testnet.Dir))
+func Setup(testnet *e2e.Testnet, infp infra.Provider) error {
+	logger.Info("setup", "msg", log.NewLazySprintf("Generating testnet files in %q", testnet.Dir))
 
 	err := os.MkdirAll(testnet.Dir, os.ModePerm)
 	if err != nil {
 		return err
 	}
 
-	compose, err := MakeDockerCompose(testnet)
-	if err != nil {
-		return err
-	}
-	err = ioutil.WriteFile(filepath.Join(testnet.Dir, "docker-compose.yml"), compose, 0644)
+	err = infp.Setup()
 	if err != nil {
 		return err
 	}
@@ -64,21 +59,21 @@ func Setup(testnet *e2e.Testnet) error {
 
 	for _, node := range testnet.Nodes {
 		nodeDir := filepath.Join(testnet.Dir, node.Name)
+
 		dirs := []string{
 			filepath.Join(nodeDir, "config"),
 			filepath.Join(nodeDir, "data"),
 			filepath.Join(nodeDir, "data", "app"),
 		}
 		for _, dir := range dirs {
-			err := os.MkdirAll(dir, 0755)
+			// light clients don't need an app directory
+			if node.Mode == e2e.ModeLight && strings.Contains(dir, "app") {
+				continue
+			}
+			err := os.MkdirAll(dir, 0o755)
 			if err != nil {
 				return err
 			}
-		}
-
-		err = genesis.SaveAs(filepath.Join(nodeDir, "config", "genesis.json"))
-		if err != nil {
-			return err
 		}
 
 		cfg, err := MakeConfig(node)
@@ -91,7 +86,17 @@ func Setup(testnet *e2e.Testnet) error {
 		if err != nil {
 			return err
 		}
-		err = ioutil.WriteFile(filepath.Join(nodeDir, "config", "app.toml"), appCfg, 0644)
+		err = os.WriteFile(filepath.Join(nodeDir, "config", "app.toml"), appCfg, 0o644) //nolint:gosec
+		if err != nil {
+			return err
+		}
+
+		if node.Mode == e2e.ModeLight {
+			// stop early if a light client
+			continue
+		}
+
+		err = genesis.SaveAs(filepath.Join(nodeDir, "config", "genesis.json"))
 		if err != nil {
 			return err
 		}
@@ -106,7 +111,7 @@ func Setup(testnet *e2e.Testnet) error {
 			filepath.Join(nodeDir, PrivvalStateFile),
 		)).Save()
 
-		// Set up a dummy validator. Tendermint requires a file PV even when not used, so we
+		// Set up a dummy validator. Ostracon requires a file PV even when not used, so we
 		// give it a dummy such that it will fail if it actually tries to use it.
 		(privval.NewFilePV(ed25519.GenPrivKey(),
 			filepath.Join(nodeDir, PrivvalDummyKeyFile),
@@ -115,73 +120,6 @@ func Setup(testnet *e2e.Testnet) error {
 	}
 
 	return nil
-}
-
-// MakeDockerCompose generates a Docker Compose config for a testnet.
-func MakeDockerCompose(testnet *e2e.Testnet) ([]byte, error) {
-	// Must use version 2 Docker Compose format, to support IPv6.
-	tmpl, err := template.New("docker-compose").Funcs(template.FuncMap{
-		"misbehaviorsToString": func(misbehaviors map[int64]string) string {
-			str := ""
-			for height, misbehavior := range misbehaviors {
-				// after the first behavior set, a comma must be prepended
-				if str != "" {
-					str += ","
-				}
-				heightString := strconv.Itoa(int(height))
-				str += misbehavior + "," + heightString
-			}
-			return str
-		},
-	}).Parse(`version: '2.4'
-
-networks:
-  {{ .Name }}:
-    labels:
-      e2e: true
-    driver: bridge
-{{- if .IPv6 }}
-    enable_ipv6: true
-{{- end }}
-    ipam:
-      driver: default
-      config:
-      - subnet: {{ .IP }}
-
-services:
-{{- range .Nodes }}
-  {{ .Name }}:
-    labels:
-      e2e: true
-    container_name: {{ .Name }}
-    image: tendermint/e2e-node
-{{- if eq .ABCIProtocol "builtin" }}
-    entrypoint: /usr/bin/entrypoint-builtin
-{{- else if .Misbehaviors }}
-    entrypoint: /usr/bin/entrypoint-maverick
-    command: ["node", "--misbehaviors", "{{ misbehaviorsToString .Misbehaviors }}"]
-{{- end }}
-    init: true
-    ports:
-    - 26656
-    - {{ if .ProxyPort }}{{ .ProxyPort }}:{{ end }}26657
-    - 6060
-    volumes:
-    - ./{{ .Name }}:/tendermint
-    networks:
-      {{ $.Name }}:
-        ipv{{ if $.IPv6 }}6{{ else }}4{{ end}}_address: {{ .IP }}
-
-{{end}}`)
-	if err != nil {
-		return nil, err
-	}
-	var buf bytes.Buffer
-	err = tmpl.Execute(&buf, testnet)
-	if err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }
 
 // MakeGenesis generates a genesis document.
@@ -200,7 +138,7 @@ func MakeGenesis(testnet *e2e.Testnet) (types.GenesisDoc, error) {
 			Power:   power,
 		})
 	}
-	// The validator set will be sorted internally by Tendermint ranked by power,
+	// The validator set will be sorted internally by Ostracon ranked by power,
 	// but we sort it here as well so that all genesis files are identical.
 	sort.Slice(genesis.Validators, func(i, j int) bool {
 		return strings.Compare(genesis.Validators[i].Name, genesis.Validators[j].Name) == -1
@@ -215,7 +153,7 @@ func MakeGenesis(testnet *e2e.Testnet) (types.GenesisDoc, error) {
 	return genesis, genesis.ValidateAndComplete()
 }
 
-// MakeConfig generates a Tendermint config for a node.
+// MakeConfig generates an Ostracon config for a node.
 func MakeConfig(node *e2e.Node) (*config.Config, error) {
 	cfg := config.DefaultConfig()
 	cfg.Moniker = node.Name
@@ -242,7 +180,7 @@ func MakeConfig(node *e2e.Node) (*config.Config, error) {
 		return nil, fmt.Errorf("unexpected ABCI protocol setting %q", node.ABCIProtocol)
 	}
 
-	// Tendermint errors if it does not have a privval key set up, regardless of whether
+	// Ostracon errors if it does not have a privval key set up, regardless of whether
 	// it's actually needed (e.g. for remote KMS or non-validators). We set up a dummy
 	// key here by default, and use the real key for actual validators that should use
 	// the file privval.
@@ -266,7 +204,7 @@ func MakeConfig(node *e2e.Node) (*config.Config, error) {
 	case e2e.ModeSeed:
 		cfg.P2P.SeedMode = true
 		cfg.P2P.PexReactor = true
-	case e2e.ModeFull:
+	case e2e.ModeFull, e2e.ModeLight:
 		// Don't need to do anything, since we're using a dummy privval key by default.
 	default:
 		return nil, fmt.Errorf("unexpected mode %q", node.Mode)
@@ -312,14 +250,19 @@ func MakeConfig(node *e2e.Node) (*config.Config, error) {
 // MakeAppConfig generates an ABCI application config for a node.
 func MakeAppConfig(node *e2e.Node) ([]byte, error) {
 	cfg := map[string]interface{}{
-		"chain_id":          node.Testnet.Name,
-		"dir":               "data/app",
-		"listen":            AppAddressUNIX,
-		"protocol":          "socket",
-		"persist_interval":  node.PersistInterval,
-		"snapshot_interval": node.SnapshotInterval,
-		"retain_blocks":     node.RetainBlocks,
-		"key_type":          node.PrivvalKey.Type(),
+		"chain_id":               node.Testnet.Name,
+		"dir":                    "data/app",
+		"listen":                 AppAddressUNIX,
+		"mode":                   node.Mode,
+		"proxy_port":             node.ProxyPort,
+		"protocol":               "socket",
+		"persist_interval":       node.PersistInterval,
+		"snapshot_interval":      node.SnapshotInterval,
+		"retain_blocks":          node.RetainBlocks,
+		"key_type":               node.PrivvalKey.Type(),
+		"prepare_proposal_delay": node.Testnet.PrepareProposalDelay,
+		"process_proposal_delay": node.Testnet.ProcessProposalDelay,
+		"check_tx_delay":         node.Testnet.CheckTxDelay,
 	}
 	switch node.ABCIProtocol {
 	case e2e.ProtocolUNIX:
@@ -331,7 +274,7 @@ func MakeAppConfig(node *e2e.Node) ([]byte, error) {
 		cfg["protocol"] = "grpc"
 	case e2e.ProtocolBuiltin:
 		delete(cfg, "listen")
-		cfg["protocol"] = "builtin"
+		cfg["protocol"] = string(node.ABCIProtocol)
 	default:
 		return nil, fmt.Errorf("unexpected ABCI protocol setting %q", node.ABCIProtocol)
 	}
@@ -351,18 +294,21 @@ func MakeAppConfig(node *e2e.Node) ([]byte, error) {
 		}
 	}
 
-	misbehaviors := make(map[string]string)
-	for height, misbehavior := range node.Misbehaviors {
-		misbehaviors[strconv.Itoa(int(height))] = misbehavior
-	}
-	cfg["misbehaviors"] = misbehaviors
-
 	if len(node.Testnet.ValidatorUpdates) > 0 {
 		validatorUpdates := map[string]map[string]int64{}
 		for height, validators := range node.Testnet.ValidatorUpdates {
 			updateVals := map[string]int64{}
 			for node, power := range validators {
-				updateVals[base64.StdEncoding.EncodeToString(node.PrivvalKey.PubKey().Bytes())] = power
+				pubKey := node.PrivvalKey.PubKey()
+				pc, err := cryptoenc.PubKeyToProto(pubKey)
+				if err != nil {
+					return nil, fmt.Errorf("invalid pubkey %q: %w", pubKey.Address(), err)
+				}
+				pcBytes, err := pc.Marshal()
+				if err != nil {
+					return nil, fmt.Errorf("invalid protobuf pubkey %q: %w", pubKey.Address(), err)
+				}
+				updateVals[base64.StdEncoding.EncodeToString(pcBytes)] = power
 			}
 			validatorUpdates[fmt.Sprintf("%v", height)] = updateVals
 		}
@@ -383,11 +329,11 @@ func UpdateConfigStateSync(node *e2e.Node, height int64, hash []byte) error {
 
 	// FIXME Apparently there's no function to simply load a config file without
 	// involving the entire Viper apparatus, so we'll just resort to regexps.
-	bz, err := ioutil.ReadFile(cfgPath)
+	bz, err := os.ReadFile(cfgPath)
 	if err != nil {
 		return err
 	}
 	bz = regexp.MustCompile(`(?m)^trust_height =.*`).ReplaceAll(bz, []byte(fmt.Sprintf(`trust_height = %v`, height)))
 	bz = regexp.MustCompile(`(?m)^trust_hash =.*`).ReplaceAll(bz, []byte(fmt.Sprintf(`trust_hash = "%X"`, hash)))
-	return ioutil.WriteFile(cfgPath, bz, 0644)
+	return os.WriteFile(cfgPath, bz, 0o644) //nolint:gosec
 }

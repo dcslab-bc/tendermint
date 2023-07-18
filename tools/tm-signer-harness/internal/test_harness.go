@@ -8,17 +8,16 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/tendermint/tendermint/crypto/tmhash"
-
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	"github.com/tendermint/tendermint/privval"
-	"github.com/tendermint/tendermint/state"
-
-	"github.com/tendermint/tendermint/libs/log"
-	tmnet "github.com/tendermint/tendermint/libs/net"
-	tmos "github.com/tendermint/tendermint/libs/os"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	"github.com/tendermint/tendermint/types"
+
+	"github.com/Finschia/ostracon/crypto/ed25519"
+	"github.com/Finschia/ostracon/crypto/tmhash"
+	"github.com/Finschia/ostracon/libs/log"
+	tmnet "github.com/Finschia/ostracon/libs/net"
+	tmos "github.com/Finschia/ostracon/libs/os"
+	"github.com/Finschia/ostracon/privval"
+	"github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/types"
 )
 
 // Test harness error codes (which act as exit codes when the test harness fails).
@@ -49,7 +48,7 @@ type TestHarnessError struct {
 var _ error = (*TestHarnessError)(nil)
 
 // TestHarness allows for testing of a remote signer to ensure compatibility
-// with this version of Tendermint.
+// with this version of Ostracon.
 type TestHarness struct {
 	addr             string
 	signerClient     *privval.SignerClient
@@ -85,7 +84,7 @@ type timeoutError interface {
 	Timeout() bool
 }
 
-// NewTestHarness will load Tendermint data from the given files (including
+// NewTestHarness will load Ostracon data from the given files (including
 // validator public/private keypairs and chain details) and create a new
 // harness.
 func NewTestHarness(logger log.Logger, cfg TestHarnessConfig) (*TestHarness, error) {
@@ -189,7 +188,7 @@ func (th *TestHarness) Run() {
 
 // TestPublicKey just validates that we can (1) fetch the public key from the
 // remote signer, and (2) it matches the public key we've configured for our
-// local Tendermint version.
+// local Ostracon version.
 func (th *TestHarness) TestPublicKey() error {
 	th.logger.Info("TEST: Public key of remote signer")
 	fpvk, err := th.fpv.GetPubKey()

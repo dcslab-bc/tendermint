@@ -5,15 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"time"
 
-	"github.com/tendermint/tendermint/crypto"
-	tmbytes "github.com/tendermint/tendermint/libs/bytes"
-	tmjson "github.com/tendermint/tendermint/libs/json"
-	tmos "github.com/tendermint/tendermint/libs/os"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	tmtime "github.com/tendermint/tendermint/types/time"
+
+	"github.com/Finschia/ostracon/crypto"
+	tmbytes "github.com/Finschia/ostracon/libs/bytes"
+	tmjson "github.com/Finschia/ostracon/libs/json"
+	tmos "github.com/Finschia/ostracon/libs/os"
+	tmtime "github.com/Finschia/ostracon/types/time"
 )
 
 const (
@@ -35,7 +36,7 @@ type GenesisValidator struct {
 	Name    string        `json:"name"`
 }
 
-// GenesisDoc defines the initial conditions for a tendermint blockchain, in particular its validator set.
+// GenesisDoc defines the initial conditions for an ostracon blockchain, in particular its validator set.
 type GenesisDoc struct {
 	GenesisTime     time.Time                `json:"genesis_time"`
 	ChainID         string                   `json:"chain_id"`
@@ -106,6 +107,15 @@ func (genDoc *GenesisDoc) ValidateAndComplete() error {
 	return nil
 }
 
+// Hash returns the hash of the GenesisDoc
+func (genDoc *GenesisDoc) Hash() []byte {
+	genDocBytes, err := tmjson.Marshal(genDoc)
+	if err != nil {
+		panic(err)
+	}
+	return crypto.Sha256(genDocBytes)
+}
+
 //------------------------------------------------------------
 // Make genesis state from file
 
@@ -126,7 +136,7 @@ func GenesisDocFromJSON(jsonBlob []byte) (*GenesisDoc, error) {
 
 // GenesisDocFromFile reads JSON data from a file and unmarshalls it into a GenesisDoc.
 func GenesisDocFromFile(genDocFile string) (*GenesisDoc, error) {
-	jsonBlob, err := ioutil.ReadFile(genDocFile)
+	jsonBlob, err := os.ReadFile(genDocFile)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't read GenesisDoc file: %w", err)
 	}

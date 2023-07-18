@@ -4,8 +4,10 @@ import (
 	"context"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	core "github.com/tendermint/tendermint/rpc/core"
-	rpctypes "github.com/tendermint/tendermint/rpc/jsonrpc/types"
+
+	ocabci "github.com/Finschia/ostracon/abci/types"
+	core "github.com/Finschia/ostracon/rpc/core"
+	rpctypes "github.com/Finschia/ostracon/rpc/jsonrpc/types"
 )
 
 type broadcastAPI struct {
@@ -25,7 +27,7 @@ func (bapi *broadcastAPI) BroadcastTx(ctx context.Context, req *RequestBroadcast
 	}
 
 	return &ResponseBroadcastTx{
-		CheckTx: &abci.ResponseCheckTx{
+		CheckTx: &ocabci.ResponseCheckTx{
 			Code: res.CheckTx.Code,
 			Data: res.CheckTx.Data,
 			Log:  res.CheckTx.Log,

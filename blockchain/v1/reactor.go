@@ -5,14 +5,16 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/tendermint/tendermint/behaviour"
-	bc "github.com/tendermint/tendermint/blockchain"
-	"github.com/tendermint/tendermint/libs/log"
-	"github.com/tendermint/tendermint/p2p"
 	bcproto "github.com/tendermint/tendermint/proto/tendermint/blockchain"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/store"
-	"github.com/tendermint/tendermint/types"
+
+	"github.com/Finschia/ostracon/behaviour"
+	bc "github.com/Finschia/ostracon/blockchain"
+	"github.com/Finschia/ostracon/libs/log"
+	"github.com/Finschia/ostracon/p2p"
+	ocbcproto "github.com/Finschia/ostracon/proto/ostracon/blockchain"
+	sm "github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/store"
+	"github.com/Finschia/ostracon/types"
 )
 
 const (
@@ -71,7 +73,7 @@ type BlockchainReactor struct {
 
 // NewBlockchainReactor returns new reactor instance.
 func NewBlockchainReactor(state sm.State, blockExec *sm.BlockExecutor, store *store.BlockStore,
-	fastSync bool) *BlockchainReactor {
+	fastSync bool, async bool, recvBufSize int) *BlockchainReactor {
 
 	if state.LastBlockHeight != store.Height() {
 		panic(fmt.Sprintf("state (%v) and store (%v) height mismatch", state.LastBlockHeight,
@@ -99,7 +101,7 @@ func NewBlockchainReactor(state sm.State, blockExec *sm.BlockExecutor, store *st
 	}
 	fsm := NewFSM(startHeight, bcR)
 	bcR.fsm = fsm
-	bcR.BaseReactor = *p2p.NewBaseReactor("BlockchainReactor", bcR)
+	bcR.BaseReactor = *p2p.NewBaseReactor("BlockchainReactor", bcR, async, recvBufSize)
 	// bcR.swReporter = behaviour.NewSwitchReporter(bcR.BaseReactor.Switch)
 
 	return bcR
@@ -139,6 +141,13 @@ func (bcR *BlockchainReactor) SetLogger(l log.Logger) {
 // OnStart implements service.Service.
 func (bcR *BlockchainReactor) OnStart() error {
 	bcR.swReporter = behaviour.NewSwitchReporter(bcR.BaseReactor.Switch)
+
+	// call BaseReactor's OnStart()
+	err := bcR.BaseReactor.OnStart()
+	if err != nil {
+		return err
+	}
+
 	if bcR.fastSync {
 		go bcR.poolRoutine()
 	}
@@ -206,7 +215,7 @@ func (bcR *BlockchainReactor) sendBlockToPeer(msg *bcproto.BlockRequest,
 			bcR.Logger.Error("Could not send block message to peer", "err", err)
 			return false
 		}
-		msgBytes, err := bc.EncodeMsg(&bcproto.BlockResponse{Block: pbbi})
+		msgBytes, err := bc.EncodeMsg(&ocbcproto.BlockResponse{Block: pbbi})
 		if err != nil {
 			bcR.Logger.Error("unable to marshal msg", "err", err)
 			return false
@@ -280,7 +289,7 @@ func (bcR *BlockchainReactor) Receive(chID byte, src p2p.Peer, msgBytes []byte) 
 			bcR.Logger.Error("Could not send status message to peer", "src", src)
 		}
 
-	case *bcproto.BlockResponse:
+	case *ocbcproto.BlockResponse:
 		bi, err := types.BlockFromProto(msg.Block)
 		if err != nil {
 			bcR.Logger.Error("error transition block from protobuf", "err", err)
@@ -481,7 +490,7 @@ func (bcR *BlockchainReactor) processBlock() error {
 
 	bcR.store.SaveBlock(first, firstParts, second.LastCommit)
 
-	bcR.state, _, err = bcR.blockExec.ApplyBlock(bcR.state, firstID, first)
+	bcR.state, _, err = bcR.blockExec.ApplyBlock(bcR.state, firstID, first, nil)
 	if err != nil {
 		panic(fmt.Sprintf("failed to process committed block (%d:%X): %v", first.Height, first.Hash(), err))
 	}
@@ -534,8 +543,8 @@ func (bcR *BlockchainReactor) switchToConsensus() {
 // Called by FSM and pool:
 // - pool calls when it detects slow peer or when peer times out
 // - FSM calls when:
-//    - adding a block (addBlock) fails
-//    - reactor processing of a block reports failure and FSM sends back the peers of first and second blocks
+//   - adding a block (addBlock) fails
+//   - reactor processing of a block reports failure and FSM sends back the peers of first and second blocks
 func (bcR *BlockchainReactor) sendPeerError(err error, peerID p2p.ID) {
 	bcR.Logger.Info("sendPeerError:", "peer", peerID, "error", err)
 	msgData := bcFsmMessage{

@@ -1,9 +1,9 @@
 package version
 
 var (
-	// TMCoreSemVer is the current version of Tendermint Core.
+	// OCCoreSemVer is the current version of Ostracon Core.
 	// It's the Semantic Version of the software.
-	TMCoreSemVer string
+	OCCoreSemVer string
 )
 
 const (
@@ -21,4 +21,7 @@ var (
 	// BlockProtocol versions all block data structures and processing.
 	// This includes validity of blocks and state updates.
 	BlockProtocol uint64 = 11
+
+	// AppProtocol versions ABCI application.
+	AppProtocol uint64 = 0
 )

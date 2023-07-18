@@ -2,23 +2,36 @@ package privval
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"testing"
 	"time"
 
+	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	"github.com/tendermint/tendermint/crypto/tmhash"
-	tmjson "github.com/tendermint/tendermint/libs/json"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	"github.com/tendermint/tendermint/types"
-	tmtime "github.com/tendermint/tendermint/types/time"
+	"github.com/Finschia/ostracon/crypto/ed25519"
+	"github.com/Finschia/ostracon/crypto/tmhash"
+	tmjson "github.com/Finschia/ostracon/libs/json"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
+	"github.com/Finschia/ostracon/types"
+	tmtime "github.com/Finschia/ostracon/types/time"
 )
+
+func TestGenFilePV(t *testing.T) {
+	tempKeyFile, err := ioutil.TempFile("", "priv_validator_key_")
+	require.Nil(t, err)
+	tempStateFile, err := ioutil.TempFile("", "priv_validator_state_")
+	require.Nil(t, err)
+
+	privVal := GenFilePV(tempKeyFile.Name(), tempStateFile.Name())
+	require.Nil(t, err)
+	require.Equal(t, ed25519.KeyType, privVal.Key.PubKey.Type())
+}
 
 func TestGenLoadValidator(t *testing.T) {
 	assert := assert.New(t)
@@ -257,6 +270,26 @@ func TestSignProposal(t *testing.T) {
 	err = privVal.SignProposal("mychainid", pbp)
 	assert.NoError(err)
 	assert.Equal(sig, proposal.Signature)
+}
+
+func TestGenerateVRFProof(t *testing.T) {
+	tempKeyFile, err := ioutil.TempFile("", "priv_validator_key_")
+	require.Nil(t, err)
+	tempStateFile, err := ioutil.TempFile("", "priv_validator_state_")
+	require.Nil(t, err)
+
+	privVal := GenFilePV(tempKeyFile.Name(), tempStateFile.Name())
+	success := [][]byte{{}, {0x00}, make([]byte, 100)}
+	for _, msg := range success {
+		proof, err := privVal.GenerateVRFProof(msg)
+		require.Nil(t, err)
+		t.Log("  Message    : ", hex.EncodeToString(msg), " -> ", hex.EncodeToString(proof[:]))
+		pubKey, err := privVal.GetPubKey()
+		require.NoError(t, err)
+		output, err := pubKey.VRFVerify(proof, msg)
+		require.Nil(t, err)
+		require.NotNil(t, output)
+	}
 }
 
 func TestDifferByTimestamp(t *testing.T) {

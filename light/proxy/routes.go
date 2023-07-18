@@ -1,13 +1,13 @@
 package proxy
 
 import (
-	"github.com/tendermint/tendermint/libs/bytes"
-	lrpc "github.com/tendermint/tendermint/light/rpc"
-	rpcclient "github.com/tendermint/tendermint/rpc/client"
-	ctypes "github.com/tendermint/tendermint/rpc/core/types"
-	rpcserver "github.com/tendermint/tendermint/rpc/jsonrpc/server"
-	rpctypes "github.com/tendermint/tendermint/rpc/jsonrpc/types"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/libs/bytes"
+	lrpc "github.com/Finschia/ostracon/light/rpc"
+	rpcclient "github.com/Finschia/ostracon/rpc/client"
+	ctypes "github.com/Finschia/ostracon/rpc/core/types"
+	rpcserver "github.com/Finschia/ostracon/rpc/jsonrpc/server"
+	rpctypes "github.com/Finschia/ostracon/rpc/jsonrpc/types"
+	"github.com/Finschia/ostracon/types"
 )
 
 func RPCRoutes(c *lrpc.Client) map[string]*rpcserver.RPCFunc {
@@ -23,12 +23,14 @@ func RPCRoutes(c *lrpc.Client) map[string]*rpcserver.RPCFunc {
 		"net_info":             rpcserver.NewRPCFunc(makeNetInfoFunc(c), ""),
 		"blockchain":           rpcserver.NewRPCFunc(makeBlockchainInfoFunc(c), "minHeight,maxHeight"),
 		"genesis":              rpcserver.NewRPCFunc(makeGenesisFunc(c), ""),
+		"genesis_chunked":      rpcserver.NewRPCFunc(makeGenesisChunkedFunc(c), ""),
 		"block":                rpcserver.NewRPCFunc(makeBlockFunc(c), "height"),
 		"block_by_hash":        rpcserver.NewRPCFunc(makeBlockByHashFunc(c), "hash"),
 		"block_results":        rpcserver.NewRPCFunc(makeBlockResultsFunc(c), "height"),
 		"commit":               rpcserver.NewRPCFunc(makeCommitFunc(c), "height"),
 		"tx":                   rpcserver.NewRPCFunc(makeTxFunc(c), "hash,prove"),
 		"tx_search":            rpcserver.NewRPCFunc(makeTxSearchFunc(c), "query,prove,page,per_page,order_by"),
+		"block_search":         rpcserver.NewRPCFunc(makeBlockSearchFunc(c), "query,page,per_page,order_by"),
 		"validators":           rpcserver.NewRPCFunc(makeValidatorsFunc(c), "height,page,per_page"),
 		"dump_consensus_state": rpcserver.NewRPCFunc(makeDumpConsensusStateFunc(c), ""),
 		"consensus_state":      rpcserver.NewRPCFunc(makeConsensusStateFunc(c), ""),
@@ -91,6 +93,14 @@ func makeGenesisFunc(c *lrpc.Client) rpcGenesisFunc {
 	}
 }
 
+type rpcGenesisChunkedFunc func(ctx *rpctypes.Context, chunk uint) (*ctypes.ResultGenesisChunk, error)
+
+func makeGenesisChunkedFunc(c *lrpc.Client) rpcGenesisChunkedFunc {
+	return func(ctx *rpctypes.Context, chunk uint) (*ctypes.ResultGenesisChunk, error) {
+		return c.GenesisChunked(ctx.Context(), chunk)
+	}
+}
+
 type rpcBlockFunc func(ctx *rpctypes.Context, height *int64) (*ctypes.ResultBlock, error)
 
 func makeBlockFunc(c *lrpc.Client) rpcBlockFunc {
@@ -131,13 +141,43 @@ func makeTxFunc(c *lrpc.Client) rpcTxFunc {
 	}
 }
 
-type rpcTxSearchFunc func(ctx *rpctypes.Context, query string, prove bool,
-	page, perPage *int, orderBy string) (*ctypes.ResultTxSearch, error)
+type rpcTxSearchFunc func(
+	ctx *rpctypes.Context,
+	query string,
+	prove bool,
+	page, perPage *int,
+	orderBy string,
+) (*ctypes.ResultTxSearch, error)
 
 func makeTxSearchFunc(c *lrpc.Client) rpcTxSearchFunc {
-	return func(ctx *rpctypes.Context, query string, prove bool, page, perPage *int, orderBy string) (
-		*ctypes.ResultTxSearch, error) {
+	return func(
+		ctx *rpctypes.Context,
+		query string,
+		prove bool,
+		page, perPage *int,
+		orderBy string,
+	) (*ctypes.ResultTxSearch, error) {
 		return c.TxSearch(ctx.Context(), query, prove, page, perPage, orderBy)
+	}
+}
+
+type rpcBlockSearchFunc func(
+	ctx *rpctypes.Context,
+	query string,
+	prove bool,
+	page, perPage *int,
+	orderBy string,
+) (*ctypes.ResultBlockSearch, error)
+
+func makeBlockSearchFunc(c *lrpc.Client) rpcBlockSearchFunc {
+	return func(
+		ctx *rpctypes.Context,
+		query string,
+		prove bool,
+		page, perPage *int,
+		orderBy string,
+	) (*ctypes.ResultBlockSearch, error) {
+		return c.BlockSearch(ctx.Context(), query, page, perPage, orderBy)
 	}
 }
 

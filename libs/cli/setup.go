@@ -24,7 +24,7 @@ type Executable interface {
 	Execute() error
 }
 
-// PrepareBaseCmd is meant for tendermint and other servers
+// PrepareBaseCmd is meant for ostracon and other servers
 func PrepareBaseCmd(cmd *cobra.Command, envPrefix, defaultHome string) Executor {
 	cobra.OnInitialize(func() { initEnv(envPrefix) })
 	cmd.PersistentFlags().StringP(HomeFlag, "", defaultHome, "directory for config and data")
@@ -48,13 +48,13 @@ func PrepareMainCmd(cmd *cobra.Command, envPrefix, defaultHome string) Executor 
 func initEnv(prefix string) {
 	copyEnvVars(prefix)
 
-	// env variables with TM prefix (eg. TM_ROOT)
+	// env variables with OC prefix (eg. OC_ROOT)
 	viper.SetEnvPrefix(prefix)
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 	viper.AutomaticEnv()
 }
 
-// This copies all variables like TMROOT to TM_ROOT,
+// This copies all variables like OCROOT to OC_ROOT,
 // so we can support both formats for the user
 func copyEnvVars(prefix string) {
 	prefix = strings.ToUpper(prefix)

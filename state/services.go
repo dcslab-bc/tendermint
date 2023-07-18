@@ -1,7 +1,7 @@
 package state
 
 import (
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/types"
 )
 
 //------------------------------------------------------
@@ -11,6 +11,8 @@ import (
 
 //------------------------------------------------------
 // blockstore
+
+//go:generate mockery --case underscore --name BlockStore
 
 // BlockStore defines the interface used by the ConsensusState.
 type BlockStore interface {

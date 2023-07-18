@@ -15,8 +15,8 @@ import (
 
 	"golang.org/x/net/netutil"
 
-	"github.com/tendermint/tendermint/libs/log"
-	types "github.com/tendermint/tendermint/rpc/jsonrpc/types"
+	"github.com/Finschia/ostracon/libs/log"
+	types "github.com/Finschia/ostracon/rpc/jsonrpc/types"
 )
 
 // Config is a RPC server configuration.
@@ -27,6 +27,8 @@ type Config struct {
 	ReadTimeout time.Duration
 	// mirrors http.Server#WriteTimeout
 	WriteTimeout time.Duration
+	// mirrors http.Server#IdleTimeout
+	IdleTimeout time.Duration
 	// MaxBodyBytes controls the maximum number of bytes the
 	// server will read parsing the request body.
 	MaxBodyBytes int64
@@ -40,6 +42,7 @@ func DefaultConfig() *Config {
 		MaxOpenConnections: 0, // unlimited
 		ReadTimeout:        10 * time.Second,
 		WriteTimeout:       10 * time.Second,
+		IdleTimeout:        60 * time.Second,
 		MaxBodyBytes:       int64(1000000), // 1MB
 		MaxHeaderBytes:     1 << 20,        // same as the net/http default
 	}
@@ -56,6 +59,7 @@ func Serve(listener net.Listener, handler http.Handler, logger log.Logger, confi
 		Handler:        RecoverAndLogHandler(maxBytesHandler{h: handler, n: config.MaxBodyBytes}, logger),
 		ReadTimeout:    config.ReadTimeout,
 		WriteTimeout:   config.WriteTimeout,
+		IdleTimeout:    config.IdleTimeout,
 		MaxHeaderBytes: config.MaxHeaderBytes,
 	}
 	err := s.Serve(listener)
@@ -81,6 +85,7 @@ func ServeTLS(
 		Handler:        RecoverAndLogHandler(maxBytesHandler{h: handler, n: config.MaxBodyBytes}, logger),
 		ReadTimeout:    config.ReadTimeout,
 		WriteTimeout:   config.WriteTimeout,
+		IdleTimeout:    config.IdleTimeout,
 		MaxHeaderBytes: config.MaxHeaderBytes,
 	}
 	err := s.ServeTLS(listener, certFile, keyFile)
@@ -89,30 +94,32 @@ func ServeTLS(
 	return err
 }
 
-// WriteRPCResponseHTTPError marshals res as JSON and writes it to w.
+// WriteRPCResponseHTTPError marshals res as JSON (with indent) and writes it
+// to w.
 //
-// Panics if it can't Marshal res or write to w.
+// source: https://www.jsonrpc.org/historical/json-rpc-over-http.html
 func WriteRPCResponseHTTPError(
 	w http.ResponseWriter,
 	httpCode int,
 	res types.RPCResponse,
-) {
+) error {
+	if res.Error == nil {
+		panic("tried to write http error response without RPC error")
+	}
+
 	jsonBytes, err := json.MarshalIndent(res, "", "  ")
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("json marshal: %w", err)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(httpCode)
-	if _, err := w.Write(jsonBytes); err != nil {
-		panic(err)
-	}
+	_, err = w.Write(jsonBytes)
+	return err
 }
 
-// WriteRPCResponseHTTP marshals res as JSON and writes it to w.
-//
-// Panics if it can't Marshal res or write to w.
-func WriteRPCResponseHTTP(w http.ResponseWriter, res ...types.RPCResponse) {
+// WriteRPCResponseHTTP marshals res as JSON (with indent) and writes it to w.
+func WriteRPCResponseHTTP(w http.ResponseWriter, res ...types.RPCResponse) error {
 	var v interface{}
 	if len(res) == 1 {
 		v = res[0]
@@ -122,13 +129,12 @@ func WriteRPCResponseHTTP(w http.ResponseWriter, res ...types.RPCResponse) {
 
 	jsonBytes, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("json marshal: %w", err)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
-	if _, err := w.Write(jsonBytes); err != nil {
-		panic(err)
-	}
+	_, err = w.Write(jsonBytes)
+	return err
 }
 
 //-----------------------------------------------------------------------------
@@ -166,7 +172,9 @@ func RecoverAndLogHandler(handler http.Handler, logger log.Logger) http.Handler 
 
 				// If RPCResponse
 				if res, ok := e.(types.RPCResponse); ok {
-					WriteRPCResponseHTTP(rww, res)
+					if wErr := WriteRPCResponseHTTP(rww, res); wErr != nil {
+						logger.Error("failed to write response", "res", res, "err", wErr)
+					}
 				} else {
 					// Panics can contain anything, attempt to normalize it as an error.
 					var err error
@@ -180,15 +188,12 @@ func RecoverAndLogHandler(handler http.Handler, logger log.Logger) http.Handler 
 					default:
 					}
 
-					logger.Error(
-						"Panic in RPC HTTP handler", "err", e, "stack",
-						string(debug.Stack()),
-					)
-					WriteRPCResponseHTTPError(
-						rww,
-						http.StatusInternalServerError,
-						types.RPCInternalError(types.JSONRPCIntID(-1), err),
-					)
+					logger.Error("panic in RPC HTTP handler", "err", e, "stack", string(debug.Stack()))
+
+					res := types.RPCInternalError(types.JSONRPCIntID(-1), err)
+					if wErr := WriteRPCResponseHTTPError(rww, http.StatusInternalServerError, res); wErr != nil {
+						logger.Error("failed to write response", "res", res, "err", wErr)
+					}
 				}
 			}
 
@@ -197,9 +202,11 @@ func RecoverAndLogHandler(handler http.Handler, logger log.Logger) http.Handler 
 			if rww.Status == -1 {
 				rww.Status = 200
 			}
-			logger.Info("Served RPC HTTP response",
-				"method", r.Method, "url", r.URL,
-				"status", rww.Status, "duration", durationMS,
+			logger.Debug("served RPC HTTP response",
+				"method", r.Method,
+				"url", r.URL,
+				"status", rww.Status,
+				"duration", durationMS,
 				"remoteAddr", r.RemoteAddr,
 			)
 		}()

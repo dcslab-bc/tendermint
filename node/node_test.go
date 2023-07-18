@@ -5,31 +5,56 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/ory/dockertest"
+	"github.com/ory/dockertest/docker"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	dbm "github.com/tendermint/tm-db"
 
-	"github.com/tendermint/tendermint/abci/example/kvstore"
-	cfg "github.com/tendermint/tendermint/config"
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	"github.com/tendermint/tendermint/evidence"
-	"github.com/tendermint/tendermint/libs/log"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
-	mempl "github.com/tendermint/tendermint/mempool"
-	"github.com/tendermint/tendermint/p2p"
-	p2pmock "github.com/tendermint/tendermint/p2p/mock"
-	"github.com/tendermint/tendermint/privval"
-	"github.com/tendermint/tendermint/proxy"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/store"
-	"github.com/tendermint/tendermint/types"
-	tmtime "github.com/tendermint/tendermint/types/time"
+	"github.com/Finschia/ostracon/abci/example/kvstore"
+	cfg "github.com/Finschia/ostracon/config"
+	"github.com/Finschia/ostracon/crypto/ed25519"
+	"github.com/Finschia/ostracon/evidence"
+	"github.com/Finschia/ostracon/libs/log"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
+	mempl "github.com/Finschia/ostracon/mempool"
+	"github.com/Finschia/ostracon/p2p"
+	"github.com/Finschia/ostracon/p2p/conn"
+	p2pmock "github.com/Finschia/ostracon/p2p/mock"
+	p2pmocks "github.com/Finschia/ostracon/p2p/mocks"
+	"github.com/Finschia/ostracon/privval"
+	"github.com/Finschia/ostracon/proxy"
+	sm "github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/store"
+	"github.com/Finschia/ostracon/types"
+	tmtime "github.com/Finschia/ostracon/types/time"
 )
+
+func TestNewOstraconNode(t *testing.T) {
+	config := cfg.ResetTestRootWithChainID("TestNewOstraconNode", "new_ostracon_node")
+	defer os.RemoveAll(config.RootDir)
+	require.Equal(t, "", config.PrivValidatorListenAddr)
+	node, err := NewOstraconNode(config, log.TestingLogger())
+	require.NoError(t, err)
+	pubKey, err := node.PrivValidator().GetPubKey()
+	require.NoError(t, err)
+	require.NotNil(t, pubKey)
+}
+
+func TestNewOstraconNode_WithoutNodeKey(t *testing.T) {
+	config := cfg.ResetTestRootWithChainID("TestNewOstraconNode", "new_ostracon_node_wo_node_key")
+	defer os.RemoveAll(config.RootDir)
+	_ = os.Remove(config.NodeKeyFile())
+	_, err := NewOstraconNode(config, log.TestingLogger())
+	require.Error(t, err)
+}
 
 func TestNodeStartStop(t *testing.T) {
 	config := cfg.ResetTestRoot("node_node_test")
@@ -120,7 +145,7 @@ func TestNodeSetAppVersion(t *testing.T) {
 	require.NoError(t, err)
 
 	// default config uses the kvstore app
-	var appVersion uint64 = kvstore.ProtocolVersion
+	var appVersion = kvstore.ProtocolVersion
 
 	// check version is set in state
 	state, err := n.stateStore.Load()
@@ -261,7 +286,7 @@ func TestCreateProposalBlock(t *testing.T) {
 
 	// fill the evidence pool with more evidence
 	// than can fit in a block
-	var currentBytes int64 = 0
+	var currentBytes int64
 	for currentBytes <= maxEvidenceBytes {
 		ev := types.NewMockDuplicateVoteEvidenceWithValidator(height, time.Now(), privVals[0], "test-chain")
 		currentBytes += int64(len(ev.Bytes()))
@@ -278,7 +303,7 @@ func TestCreateProposalBlock(t *testing.T) {
 	txLength := 100
 	for i := 0; i <= maxBytes/txLength; i++ {
 		tx := tmrand.Bytes(txLength)
-		err := mempool.CheckTx(tx, nil, mempl.TxInfo{})
+		_, err := mempool.CheckTxSync(tx, mempl.TxInfo{})
 		assert.NoError(t, err)
 	}
 
@@ -291,10 +316,15 @@ func TestCreateProposalBlock(t *testing.T) {
 	)
 
 	commit := types.NewCommit(height-1, 0, types.BlockID{}, nil)
+	message := state.MakeHashMessage(0)
+	proof, _ := privVals[0].GenerateVRFProof(message)
 	block, _ := blockExec.CreateProposalBlock(
 		height,
 		state, commit,
 		proposerAddr,
+		0,
+		proof,
+		0,
 	)
 
 	// check that the part set does not exceed the maximum block size
@@ -309,7 +339,7 @@ func TestCreateProposalBlock(t *testing.T) {
 	}
 	assert.EqualValues(t, partSetFromHeader.ByteSize(), partSet.ByteSize())
 
-	err = blockExec.ValidateBlock(state, block)
+	err = blockExec.ValidateBlock(state, 0, block)
 	assert.NoError(t, err)
 }
 
@@ -325,7 +355,7 @@ func TestMaxProposalBlockSize(t *testing.T) {
 	logger := log.TestingLogger()
 
 	var height int64 = 1
-	state, stateDB, _ := state(1, height)
+	state, stateDB, privVals := state(1, height)
 	stateStore := sm.NewStore(stateDB)
 	var maxBytes int64 = 16384
 	var partSize uint32 = 256
@@ -347,7 +377,7 @@ func TestMaxProposalBlockSize(t *testing.T) {
 	// fill the mempool with one txs just below the maximum size
 	txLength := int(types.MaxDataBytesNoEvidence(maxBytes, 1))
 	tx := tmrand.Bytes(txLength - 4) // to account for the varint
-	err = mempool.CheckTx(tx, nil, mempl.TxInfo{})
+	_, err = mempool.CheckTxSync(tx, mempl.TxInfo{})
 	assert.NoError(t, err)
 
 	blockExec := sm.NewBlockExecutor(
@@ -359,10 +389,15 @@ func TestMaxProposalBlockSize(t *testing.T) {
 	)
 
 	commit := types.NewCommit(height-1, 0, types.BlockID{}, nil)
+	message := state.MakeHashMessage(0)
+	proof, _ := privVals[0].GenerateVRFProof(message)
 	block, _ := blockExec.CreateProposalBlock(
 		height,
 		state, commit,
 		proposerAddr,
+		0,
+		proof,
+		0,
 	)
 
 	pb, err := block.ToProto()
@@ -379,6 +414,14 @@ func TestNodeNewNodeCustomReactors(t *testing.T) {
 	defer os.RemoveAll(config.RootDir)
 
 	cr := p2pmock.NewReactor()
+	cr.Channels = []*conn.ChannelDescriptor{
+		{
+			ID:                  byte(0x31),
+			Priority:            5,
+			SendQueueCapacity:   100,
+			RecvMessageCapacity: 100,
+		},
+	}
 	customBlockchainReactor := p2pmock.NewReactor()
 
 	nodeKey, err := p2p.LoadOrGenNodeKey(config.NodeKeyFile())
@@ -405,13 +448,106 @@ func TestNodeNewNodeCustomReactors(t *testing.T) {
 
 	assert.True(t, customBlockchainReactor.IsRunning())
 	assert.Equal(t, customBlockchainReactor, n.Switch().Reactor("BLOCKCHAIN"))
+
+	channels := n.NodeInfo().(p2p.DefaultNodeInfo).Channels
+	assert.Contains(t, channels, mempl.MempoolChannel)
+	assert.Contains(t, channels, cr.Channels[0].ID)
+}
+
+func TestNodeNewNodeTxIndexIndexer(t *testing.T) {
+	config := cfg.ResetTestRoot("node_new_node_tx_index_indexer_test")
+	defer os.RemoveAll(config.RootDir)
+
+	doTest := func(doProvider func(ctx *DBContext) (dbm.DB, error)) (*Node, error) {
+		nodeKey, err := p2p.LoadOrGenNodeKey(config.NodeKeyFile())
+		require.NoError(t, err)
+
+		return NewNode(config,
+			privval.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile()),
+			nodeKey,
+			proxy.DefaultClientCreator(config.ProxyApp, config.ABCI, config.DBDir()),
+			DefaultGenesisDocProviderFunc(config),
+			doProvider,
+			DefaultMetricsProvider(config.Instrumentation),
+			log.TestingLogger(),
+		)
+	}
+
+	{
+		// Change to panic-provider for test
+		n, err := doTest(func(ctx *DBContext) (dbm.DB, error) { return nil, fmt.Errorf("test error") })
+		require.Error(t, err)
+		require.Nil(t, n)
+	}
+	{
+		// Change to non-default-value for test
+		config.TxIndex.Indexer = ""
+		n, err := doTest(DefaultDBProvider)
+		require.NoError(t, err)
+		require.NotNil(t, n)
+	}
+	{
+		// Change to psql for test
+		config.TxIndex.Indexer = "psql"
+		n, err := doTest(DefaultDBProvider)
+		require.Error(t, err)
+		require.Equal(t, "no psql-conn is set for the \"psql\" indexer", err.Error())
+		require.Nil(t, n)
+
+		// config.TxIndex.PsqlConn = "cannot test with no-import postgres driver"
+		// n, err = doTest(DefaultDBProvider)
+		// require.Error(t, err)
+		// require.Equal(t, "creating psql indexer: sql: unknown driver \"postgres\" (forgotten import?)", err.Error())
+		// require.Nil(t, n)
+
+		config.TxIndex.PsqlConn = makeTestPsqlConn(t)
+		n, err = doTest(DefaultDBProvider)
+		require.NoError(t, err)
+		require.NotNil(t, n)
+	}
+}
+
+func makeTestPsqlConn(t *testing.T) string {
+	user := "postgres"
+	password := "secret"
+	port := "5432"
+	dsn := "postgres://%s:%s@localhost:%s/%s?sslmode=disable"
+	dbName := "postgres"
+
+	pool, err := dockertest.NewPool(os.Getenv("DOCKER_URL"))
+	if err != nil {
+		require.NoError(t, err)
+	}
+	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
+		Repository: "postgres",
+		Tag:        "13",
+		Env: []string{
+			"POSTGRES_USER=" + user,
+			"POSTGRES_PASSWORD=" + password,
+			"POSTGRES_DB=" + dbName,
+			"listen_addresses = '*'",
+		},
+		ExposedPorts: []string{port},
+	}, func(config *docker.HostConfig) {
+		// set AutoRemove to true so that stopped container goes away by itself
+		config.AutoRemove = true
+		config.RestartPolicy = docker.RestartPolicy{
+			Name: "no",
+		}
+	})
+	if err != nil {
+		require.NoError(t, err)
+	}
+	return fmt.Sprintf(dsn, user, password, resource.GetPort(port+"/tcp"), dbName)
 }
 
 func state(nVals int, height int64) (sm.State, dbm.DB, []types.PrivValidator) {
 	privVals := make([]types.PrivValidator, nVals)
 	vals := make([]types.GenesisValidator, nVals)
 	for i := 0; i < nVals; i++ {
-		privVal := types.NewMockPV()
+		secret := []byte(fmt.Sprintf("test%d", i))
+		pk := ed25519.GenPrivKeyFromSecret(secret)
+		privVal := types.NewMockPVWithParams(pk, false, false)
 		privVals[i] = privVal
 		vals[i] = types.GenesisValidator{
 			Address: privVal.PrivKey.PubKey().Address(),
@@ -441,4 +577,84 @@ func state(nVals int, height int64) (sm.State, dbm.DB, []types.PrivValidator) {
 		}
 	}
 	return s, stateDB, privVals
+}
+
+func TestNodeInvalidNodeInfoCustomReactors(t *testing.T) {
+	config := cfg.ResetTestRoot("node_new_node_custom_reactors_test")
+	defer os.RemoveAll(config.RootDir)
+
+	cr := p2pmock.NewReactor()
+	cr.Channels = []*conn.ChannelDescriptor{
+		{
+			ID:                  byte(0x31),
+			Priority:            5,
+			SendQueueCapacity:   100,
+			RecvMessageCapacity: 100,
+		},
+	}
+	customBlockchainReactor := p2pmock.NewReactor()
+
+	nodeKey, err := p2p.LoadOrGenNodeKey(config.NodeKeyFile())
+	require.NoError(t, err)
+
+	_, err = NewInvalidNode(config,
+		privval.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile()),
+		nodeKey,
+		proxy.DefaultClientCreator(config.ProxyApp, config.ABCI, config.DBDir()),
+		DefaultGenesisDocProviderFunc(config),
+		DefaultDBProvider,
+		DefaultMetricsProvider(config.Instrumentation),
+		log.TestingLogger(),
+		CustomReactors(map[string]p2p.Reactor{"FOO": cr, "BLOCKCHAIN": customBlockchainReactor}),
+	)
+	require.NoError(t, err)
+}
+
+func TestSaveAndLoadBigGensisFile(t *testing.T) {
+	stateDB, err := dbm.NewGoLevelDB("state", os.TempDir())
+	require.NoError(t, err)
+	config := cfg.ResetTestRoot("node_big_genesis_test")
+	defer os.RemoveAll(config.RootDir)
+	n, err := DefaultNewNode(config, log.TestingLogger())
+	require.NoError(t, err)
+	newChainID := strings.Repeat("a", 200000000) // about 200MB
+	n.genesisDoc.ChainID = newChainID
+	err = saveGenesisDoc(stateDB, n.genesisDoc)
+	require.NoError(t, err)
+	g, err := loadGenesisDoc(stateDB)
+	require.NoError(t, err)
+	require.Equal(t, newChainID, g.ChainID)
+	stateDB.Close()
+}
+
+func NewInvalidNode(config *cfg.Config,
+	privValidator types.PrivValidator,
+	nodeKey *p2p.NodeKey,
+	clientCreator proxy.ClientCreator,
+	genesisDocProvider GenesisDocProvider,
+	dbProvider DBProvider,
+	metricsProvider MetricsProvider,
+	logger log.Logger,
+	options ...Option) (*Node, error) {
+	n, err := NewNode(config,
+		privValidator,
+		nodeKey,
+		clientCreator,
+		genesisDocProvider,
+		dbProvider,
+		metricsProvider,
+		logger,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	transport, _ := createTransport(config, &p2pmocks.NodeInfo{}, nodeKey, n.proxyApp)
+	n.transport = transport
+
+	for _, option := range options {
+		option(n)
+	}
+
+	return n, nil
 }

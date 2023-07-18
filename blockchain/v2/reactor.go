@@ -5,14 +5,16 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tendermint/tendermint/behaviour"
-	bc "github.com/tendermint/tendermint/blockchain"
-	"github.com/tendermint/tendermint/libs/log"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
-	"github.com/tendermint/tendermint/p2p"
 	bcproto "github.com/tendermint/tendermint/proto/tendermint/blockchain"
-	"github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/types"
+
+	"github.com/Finschia/ostracon/behaviour"
+	bc "github.com/Finschia/ostracon/blockchain"
+	"github.com/Finschia/ostracon/libs/log"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
+	"github.com/Finschia/ostracon/p2p"
+	ocbcproto "github.com/Finschia/ostracon/proto/ostracon/blockchain"
+	"github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/types"
 )
 
 const (
@@ -53,7 +55,8 @@ type blockVerifier interface {
 }
 
 type blockApplier interface {
-	ApplyBlock(state state.State, blockID types.BlockID, block *types.Block) (state.State, int64, error)
+	ApplyBlock(state state.State, blockID types.BlockID, block *types.Block, times *state.CommitStepTimes) (state.State,
+		int64, error)
 }
 
 // XXX: unify naming in this package around tmState
@@ -499,7 +502,7 @@ func (r *BlockchainReactor) Receive(chID byte, src p2p.Peer, msgBytes []byte) {
 		}
 		r.mtx.RUnlock()
 
-	case *bcproto.BlockResponse:
+	case *ocbcproto.BlockResponse:
 		bi, err := types.BlockFromProto(msg.Block)
 		if err != nil {
 			r.logger.Error("error transitioning block from protobuf", "err", err)

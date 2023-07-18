@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -7,18 +7,27 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"time"
 
-	"github.com/tendermint/tendermint/abci/example/code"
 	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/libs/log"
-	"github.com/tendermint/tendermint/version"
+	"github.com/tendermint/tendermint/proto/tendermint/crypto"
+
+	"github.com/Finschia/ostracon/abci/example/code"
+	ocabci "github.com/Finschia/ostracon/abci/types"
+	cryptoenc "github.com/Finschia/ostracon/crypto/encoding"
+	"github.com/Finschia/ostracon/libs/log"
+	"github.com/Finschia/ostracon/version"
 )
+
+const E2EAppVersion = 999
 
 // Application is an ABCI application for use by end-to-end tests. It is a
 // simple key/value store for strings, storing data in memory and persisting
 // to disk as JSON, taking state sync snapshots if requested.
+
 type Application struct {
-	abci.BaseApplication
+	ocabci.BaseApplication
 	logger          log.Logger
 	state           *State
 	snapshots       *SnapshotStore
@@ -27,9 +36,65 @@ type Application struct {
 	restoreChunks   [][]byte
 }
 
+// Config allows for the setting of high level parameters for running the e2e Application
+// KeyType and ValidatorUpdates must be the same for all nodes running the same application.
+type Config struct {
+	// The directory with which state.json will be persisted in. Usually $HOME/.ostracon/data
+	Dir string `toml:"dir"`
+
+	// SnapshotInterval specifies the height interval at which the application
+	// will take state sync snapshots. Defaults to 0 (disabled).
+	SnapshotInterval uint64 `toml:"snapshot_interval"`
+
+	// RetainBlocks specifies the number of recent blocks to retain. Defaults to
+	// 0, which retains all blocks. Must be greater that PersistInterval,
+	// SnapshotInterval and EvidenceAgeHeight.
+	RetainBlocks uint64 `toml:"retain_blocks"`
+
+	// KeyType sets the curve that will be used by validators.
+	// Options are ed25519 & secp256k1
+	KeyType string `toml:"key_type"`
+
+	// PersistInterval specifies the height interval at which the application
+	// will persist state to disk. Defaults to 1 (every height), setting this to
+	// 0 disables state persistence.
+	PersistInterval uint64 `toml:"persist_interval"`
+
+	// ValidatorUpdates is a map of heights to validator names and their power,
+	// and will be returned by the ABCI application. For example, the following
+	// changes the power of validator01 and validator02 at height 1000:
+	//
+	// [validator_update.1000]
+	// validator01 = 20
+	// validator02 = 10
+	//
+	// Specifying height 0 returns the validator update during InitChain. The
+	// application returns the validator updates as-is, i.e. removing a
+	// validator must be done by returning it with power 0, and any validators
+	// not specified are not changed.
+	//
+	// height <-> pubkey <-> voting power
+	ValidatorUpdates map[string]map[string]uint8 `toml:"validator_update"`
+
+	// Add artificial delays to each of the main ABCI calls to mimic computation time
+	// of the application
+	PrepareProposalDelay time.Duration `toml:"prepare_proposal_delay"`
+	ProcessProposalDelay time.Duration `toml:"process_proposal_delay"`
+	CheckTxDelay         time.Duration `toml:"check_tx_delay"`
+	// TODO: add vote extension and finalize block delays once completed (@cmwaters)
+}
+
+func DefaultConfig(dir string) *Config {
+	return &Config{
+		PersistInterval:  1,
+		SnapshotInterval: 100,
+		Dir:              dir,
+	}
+}
+
 // NewApplication creates the application.
 func NewApplication(cfg *Config) (*Application, error) {
-	state, err := NewState(filepath.Join(cfg.Dir, "state.json"), cfg.PersistInterval)
+	state, err := NewState(cfg.Dir, cfg.PersistInterval)
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +103,7 @@ func NewApplication(cfg *Config) (*Application, error) {
 		return nil, err
 	}
 	return &Application{
-		logger:    log.NewTMLogger(log.NewSyncWriter(os.Stdout)),
+		logger:    log.NewOCLogger(log.NewSyncWriter(os.Stdout)),
 		state:     state,
 		snapshots: snapshots,
 		cfg:       cfg,
@@ -49,7 +114,7 @@ func NewApplication(cfg *Config) (*Application, error) {
 func (app *Application) Info(req abci.RequestInfo) abci.ResponseInfo {
 	return abci.ResponseInfo{
 		Version:          version.ABCIVersion,
-		AppVersion:       1,
+		AppVersion:       E2EAppVersion,
 		LastBlockHeight:  int64(app.state.Height),
 		LastBlockAppHash: app.state.Hash,
 	}
@@ -75,15 +140,20 @@ func (app *Application) InitChain(req abci.RequestInitChain) abci.ResponseInitCh
 }
 
 // CheckTx implements ABCI.
-func (app *Application) CheckTx(req abci.RequestCheckTx) abci.ResponseCheckTx {
+func (app *Application) CheckTx(req abci.RequestCheckTx) ocabci.ResponseCheckTx {
 	_, _, err := parseTx(req.Tx)
 	if err != nil {
-		return abci.ResponseCheckTx{
+		return ocabci.ResponseCheckTx{
 			Code: code.CodeTypeEncodingError,
 			Log:  err.Error(),
 		}
 	}
-	return abci.ResponseCheckTx{Code: code.CodeTypeOK, GasWanted: 1}
+
+	if app.cfg.CheckTxDelay != 0 {
+		time.Sleep(app.cfg.CheckTxDelay)
+	}
+
+	return ocabci.ResponseCheckTx{Code: code.CodeTypeOK, GasWanted: 1}
 }
 
 // DeliverTx implements ABCI.
@@ -98,12 +168,29 @@ func (app *Application) DeliverTx(req abci.RequestDeliverTx) abci.ResponseDelive
 
 // EndBlock implements ABCI.
 func (app *Application) EndBlock(req abci.RequestEndBlock) abci.ResponseEndBlock {
-	var err error
-	resp := abci.ResponseEndBlock{}
-	if resp.ValidatorUpdates, err = app.validatorUpdates(uint64(req.Height)); err != nil {
+	valUpdates, err := app.validatorUpdates(uint64(req.Height))
+	if err != nil {
 		panic(err)
 	}
-	return resp
+
+	return abci.ResponseEndBlock{
+		ValidatorUpdates: valUpdates,
+		Events: []abci.Event{
+			{
+				Type: "val_updates",
+				Attributes: []abci.EventAttribute{
+					{
+						Key:   []byte("size"),
+						Value: []byte(strconv.Itoa(valUpdates.Len())),
+					},
+					{
+						Key:   []byte("height"),
+						Value: []byte(strconv.Itoa(int(req.Height))),
+					},
+				},
+			},
+		},
+	}
 }
 
 // Commit implements ABCI.
@@ -117,7 +204,7 @@ func (app *Application) Commit() abci.ResponseCommit {
 		if err != nil {
 			panic(err)
 		}
-		logger.Info("Created state sync snapshot", "height", snapshot.Height)
+		app.logger.Info("Created state sync snapshot", "height", snapshot.Height)
 	}
 	retainHeight := int64(0)
 	if app.cfg.RetainBlocks > 0 {
@@ -187,21 +274,34 @@ func (app *Application) ApplySnapshotChunk(req abci.RequestApplySnapshotChunk) a
 	return abci.ResponseApplySnapshotChunk{Result: abci.ResponseApplySnapshotChunk_ACCEPT}
 }
 
+func (app *Application) Rollback() error {
+	return app.state.Rollback()
+}
+
 // validatorUpdates generates a validator set update.
-func (app *Application) validatorUpdates(height uint64) (abci.ValidatorUpdates, error) {
+func (app *Application) validatorUpdates(height uint64) (ocabci.ValidatorUpdates, error) {
 	updates := app.cfg.ValidatorUpdates[fmt.Sprintf("%v", height)]
 	if len(updates) == 0 {
 		return nil, nil
 	}
 
-	valUpdates := abci.ValidatorUpdates{}
+	valUpdates := ocabci.ValidatorUpdates{}
 	for keyString, power := range updates {
 
 		keyBytes, err := base64.StdEncoding.DecodeString(keyString)
 		if err != nil {
-			return nil, fmt.Errorf("invalid base64 pubkey value %q: %w", keyString, err)
+			return nil, fmt.Errorf("invalid base64.enc pubkey %q: %w", keyString, err)
 		}
-		valUpdates = append(valUpdates, abci.UpdateValidator(keyBytes, int64(power), app.cfg.KeyType))
+		pubKeyProto := crypto.PublicKey{}
+		err = pubKeyProto.Unmarshal(keyBytes)
+		if err != nil {
+			return nil, fmt.Errorf("invalid marshalled pubkey %q: %w", keyString, err)
+		}
+		pubKey, err := cryptoenc.PubKeyFromProto(&pubKeyProto)
+		if err != nil {
+			return nil, fmt.Errorf("invalid crypto pubkey %q: %w", keyString, err)
+		}
+		valUpdates = append(valUpdates, ocabci.NewValidatorUpdate(pubKey, int64(power)))
 	}
 	return valUpdates, nil
 }

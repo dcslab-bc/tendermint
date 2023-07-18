@@ -8,9 +8,9 @@ import (
 	"regexp"
 	"strings"
 
-	tmjson "github.com/tendermint/tendermint/libs/json"
-	"github.com/tendermint/tendermint/libs/log"
-	types "github.com/tendermint/tendermint/rpc/jsonrpc/types"
+	tmjson "github.com/Finschia/ostracon/libs/json"
+	"github.com/Finschia/ostracon/libs/log"
+	types "github.com/Finschia/ostracon/rpc/jsonrpc/types"
 )
 
 // HTTP + URI handler
@@ -25,8 +25,10 @@ func makeHTTPHandler(rpcFunc *RPCFunc, logger log.Logger) func(http.ResponseWrit
 	// Exception for websocket endpoints
 	if rpcFunc.ws {
 		return func(w http.ResponseWriter, r *http.Request) {
-			WriteRPCResponseHTTPError(w, http.StatusNotFound,
-				types.RPCMethodNotFoundError(dummyID))
+			res := types.RPCMethodNotFoundError(dummyID)
+			if wErr := WriteRPCResponseHTTPError(w, http.StatusNotFound, res); wErr != nil {
+				logger.Error("failed to write response", "res", res, "err", wErr)
+			}
 		}
 	}
 
@@ -39,14 +41,12 @@ func makeHTTPHandler(rpcFunc *RPCFunc, logger log.Logger) func(http.ResponseWrit
 
 		fnArgs, err := httpParamsToArgs(rpcFunc, r)
 		if err != nil {
-			WriteRPCResponseHTTPError(
-				w,
-				http.StatusInternalServerError,
-				types.RPCInvalidParamsError(
-					dummyID,
-					fmt.Errorf("error converting http params to arguments: %w", err),
-				),
+			res := types.RPCInvalidParamsError(dummyID,
+				fmt.Errorf("error converting http params to arguments: %w", err),
 			)
+			if wErr := WriteRPCResponseHTTPError(w, http.StatusInternalServerError, res); wErr != nil {
+				logger.Error("failed to write response", "res", res, "err", wErr)
+			}
 			return
 		}
 		args = append(args, fnArgs...)
@@ -56,16 +56,22 @@ func makeHTTPHandler(rpcFunc *RPCFunc, logger log.Logger) func(http.ResponseWrit
 		logger.Debug("HTTPRestRPC", "method", r.URL.Path, "args", args, "returns", returns)
 		result, err := unreflectResult(returns)
 		if err != nil {
-			WriteRPCResponseHTTPError(w, http.StatusInternalServerError,
-				types.RPCInternalError(dummyID, err))
+			if err := WriteRPCResponseHTTPError(w, http.StatusInternalServerError,
+				types.RPCInternalError(dummyID, err)); err != nil {
+				logger.Error("failed to write response", "res", result, "err", err)
+				return
+			}
 			return
 		}
-		WriteRPCResponseHTTP(w, types.NewRPCSuccessResponse(dummyID, result))
+		if err := WriteRPCResponseHTTP(w, types.NewRPCSuccessResponse(dummyID, result)); err != nil {
+			logger.Error("failed to write response", "res", result, "err", err)
+			return
+		}
 	}
 }
 
 // Covert an http query to a list of properly typed values.
-// To be properly decoded the arg must be a concrete type from tendermint (if its an interface).
+// To be properly decoded the arg must be a concrete type from ostracon (if its an interface).
 func httpParamsToArgs(rpcFunc *RPCFunc, r *http.Request) ([]reflect.Value, error) {
 	// skip types.Context
 	const argsOffset = 1

@@ -1,36 +1,42 @@
 package proxy
 
 import (
-	abcicli "github.com/tendermint/tendermint/abci/client"
 	"github.com/tendermint/tendermint/abci/types"
+
+	abcicli "github.com/Finschia/ostracon/abci/client"
+	ocabci "github.com/Finschia/ostracon/abci/types"
 )
 
-//go:generate mockery --case underscore --name AppConnConsensus|AppConnMempool|AppConnQuery|AppConnSnapshot
+//nolint
+//go:generate mockery --case underscore --name AppConnConsensus|AppConnMempool|AppConnQuery|AppConnSnapshot|ClientCreator
 
 //----------------------------------------------------------------------------------------
 // Enforce which abci msgs can be sent on a connection at the type level
 
 type AppConnConsensus interface {
-	SetResponseCallback(abcicli.Callback)
+	SetGlobalCallback(abcicli.GlobalCallback)
 	Error() error
 
 	InitChainSync(types.RequestInitChain) (*types.ResponseInitChain, error)
 
-	BeginBlockSync(types.RequestBeginBlock) (*types.ResponseBeginBlock, error)
-	DeliverTxAsync(types.RequestDeliverTx) *abcicli.ReqRes
+	BeginBlockSync(ocabci.RequestBeginBlock) (*types.ResponseBeginBlock, error)
+	DeliverTxAsync(types.RequestDeliverTx, abcicli.ResponseCallback) *abcicli.ReqRes
 	EndBlockSync(types.RequestEndBlock) (*types.ResponseEndBlock, error)
 	CommitSync() (*types.ResponseCommit, error)
 }
 
 type AppConnMempool interface {
-	SetResponseCallback(abcicli.Callback)
+	SetGlobalCallback(abcicli.GlobalCallback)
 	Error() error
 
-	CheckTxAsync(types.RequestCheckTx) *abcicli.ReqRes
-	CheckTxSync(types.RequestCheckTx) (*types.ResponseCheckTx, error)
+	CheckTxAsync(types.RequestCheckTx, abcicli.ResponseCallback) *abcicli.ReqRes
+	CheckTxSync(types.RequestCheckTx) (*ocabci.ResponseCheckTx, error)
 
-	FlushAsync() *abcicli.ReqRes
-	FlushSync() error
+	BeginRecheckTxSync(ocabci.RequestBeginRecheckTx) (*ocabci.ResponseBeginRecheckTx, error)
+	EndRecheckTxSync(ocabci.RequestEndRecheckTx) (*ocabci.ResponseEndRecheckTx, error)
+
+	FlushAsync(abcicli.ResponseCallback) *abcicli.ReqRes
+	FlushSync() (*types.ResponseFlush, error)
 }
 
 type AppConnQuery interface {
@@ -40,7 +46,7 @@ type AppConnQuery interface {
 	InfoSync(types.RequestInfo) (*types.ResponseInfo, error)
 	QuerySync(types.RequestQuery) (*types.ResponseQuery, error)
 
-	//	SetOptionSync(key string, value string) (res types.Result)
+	//	SetOptionSync(key string, value string) (res ocabci.Result)
 }
 
 type AppConnSnapshot interface {
@@ -65,8 +71,8 @@ func NewAppConnConsensus(appConn abcicli.Client) AppConnConsensus {
 	}
 }
 
-func (app *appConnConsensus) SetResponseCallback(cb abcicli.Callback) {
-	app.appConn.SetResponseCallback(cb)
+func (app *appConnConsensus) SetGlobalCallback(globalCb abcicli.GlobalCallback) {
+	app.appConn.SetGlobalCallback(globalCb)
 }
 
 func (app *appConnConsensus) Error() error {
@@ -77,12 +83,12 @@ func (app *appConnConsensus) InitChainSync(req types.RequestInitChain) (*types.R
 	return app.appConn.InitChainSync(req)
 }
 
-func (app *appConnConsensus) BeginBlockSync(req types.RequestBeginBlock) (*types.ResponseBeginBlock, error) {
+func (app *appConnConsensus) BeginBlockSync(req ocabci.RequestBeginBlock) (*types.ResponseBeginBlock, error) {
 	return app.appConn.BeginBlockSync(req)
 }
 
-func (app *appConnConsensus) DeliverTxAsync(req types.RequestDeliverTx) *abcicli.ReqRes {
-	return app.appConn.DeliverTxAsync(req)
+func (app *appConnConsensus) DeliverTxAsync(req types.RequestDeliverTx, cb abcicli.ResponseCallback) *abcicli.ReqRes {
+	return app.appConn.DeliverTxAsync(req, cb)
 }
 
 func (app *appConnConsensus) EndBlockSync(req types.RequestEndBlock) (*types.ResponseEndBlock, error) {
@@ -106,28 +112,36 @@ func NewAppConnMempool(appConn abcicli.Client) AppConnMempool {
 	}
 }
 
-func (app *appConnMempool) SetResponseCallback(cb abcicli.Callback) {
-	app.appConn.SetResponseCallback(cb)
+func (app *appConnMempool) SetGlobalCallback(globalCb abcicli.GlobalCallback) {
+	app.appConn.SetGlobalCallback(globalCb)
 }
 
 func (app *appConnMempool) Error() error {
 	return app.appConn.Error()
 }
 
-func (app *appConnMempool) FlushAsync() *abcicli.ReqRes {
-	return app.appConn.FlushAsync()
+func (app *appConnMempool) FlushAsync(cb abcicli.ResponseCallback) *abcicli.ReqRes {
+	return app.appConn.FlushAsync(cb)
 }
 
-func (app *appConnMempool) FlushSync() error {
+func (app *appConnMempool) FlushSync() (*types.ResponseFlush, error) {
 	return app.appConn.FlushSync()
 }
 
-func (app *appConnMempool) CheckTxAsync(req types.RequestCheckTx) *abcicli.ReqRes {
-	return app.appConn.CheckTxAsync(req)
+func (app *appConnMempool) CheckTxAsync(req types.RequestCheckTx, cb abcicli.ResponseCallback) *abcicli.ReqRes {
+	return app.appConn.CheckTxAsync(req, cb)
 }
 
-func (app *appConnMempool) CheckTxSync(req types.RequestCheckTx) (*types.ResponseCheckTx, error) {
+func (app *appConnMempool) CheckTxSync(req types.RequestCheckTx) (*ocabci.ResponseCheckTx, error) {
 	return app.appConn.CheckTxSync(req)
+}
+
+func (app *appConnMempool) BeginRecheckTxSync(req ocabci.RequestBeginRecheckTx) (*ocabci.ResponseBeginRecheckTx, error) {
+	return app.appConn.BeginRecheckTxSync(req)
+}
+
+func (app *appConnMempool) EndRecheckTxSync(req ocabci.RequestEndRecheckTx) (*ocabci.ResponseEndRecheckTx, error) {
+	return app.appConn.EndRecheckTxSync(req)
 }
 
 //------------------------------------------------

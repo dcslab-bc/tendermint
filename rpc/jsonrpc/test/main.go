@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/tendermint/tendermint/libs/log"
-	tmos "github.com/tendermint/tendermint/libs/os"
-	rpcserver "github.com/tendermint/tendermint/rpc/jsonrpc/server"
-	rpctypes "github.com/tendermint/tendermint/rpc/jsonrpc/types"
+	"github.com/Finschia/ostracon/libs/log"
+	tmos "github.com/Finschia/ostracon/libs/os"
+	rpcserver "github.com/Finschia/ostracon/rpc/jsonrpc/server"
+	rpctypes "github.com/Finschia/ostracon/rpc/jsonrpc/types"
 )
 
 var routes = map[string]*rpcserver.RPCFunc{
@@ -26,7 +26,7 @@ type Result struct {
 func main() {
 	var (
 		mux    = http.NewServeMux()
-		logger = log.NewTMLogger(log.NewSyncWriter(os.Stdout))
+		logger = log.NewOCLogger(log.NewSyncWriter(os.Stdout))
 	)
 
 	// Stop upon receiving SIGTERM or CTRL-C.

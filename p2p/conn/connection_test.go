@@ -11,10 +11,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/libs/log"
-	"github.com/tendermint/tendermint/libs/protoio"
 	tmp2p "github.com/tendermint/tendermint/proto/tendermint/p2p"
 	"github.com/tendermint/tendermint/proto/tendermint/types"
+
+	"github.com/Finschia/ostracon/libs/log"
+	"github.com/Finschia/ostracon/libs/protoio"
 )
 
 const maxPingPongPacketSize = 1024 // bytes
@@ -585,5 +586,49 @@ func TestConnVectors(t *testing.T) {
 		require.NoError(t, err, tc.testName)
 
 		require.Equal(t, tc.expBytes, hex.EncodeToString(bz), tc.testName)
+	}
+}
+
+func TestMConnectionChannelOverflow(t *testing.T) {
+	chOnErr := make(chan struct{})
+	chOnRcv := make(chan struct{})
+
+	mconnClient, mconnServer := newClientAndServerConnsForReadErrors(t, chOnErr)
+	t.Cleanup(stopAll(t, mconnClient, mconnServer))
+
+	mconnServer.onReceive = func(chID byte, msgBytes []byte) {
+		chOnRcv <- struct{}{}
+	}
+
+	client := mconnClient.conn
+	protoWriter := protoio.NewDelimitedWriter(client)
+
+	var packet = tmp2p.PacketMsg{
+		ChannelID: 0x01,
+		EOF:       true,
+		Data:      []byte(`42`),
+	}
+	_, err := protoWriter.WriteMsg(mustWrapPacket(&packet))
+	require.NoError(t, err)
+	assert.True(t, expectSend(chOnRcv))
+
+	packet.ChannelID = int32(1025)
+	_, err = protoWriter.WriteMsg(mustWrapPacket(&packet))
+	require.NoError(t, err)
+	assert.False(t, expectSend(chOnRcv))
+
+}
+
+type stopper interface {
+	Stop() error
+}
+
+func stopAll(t *testing.T, stoppers ...stopper) func() {
+	return func() {
+		for _, s := range stoppers {
+			if err := s.Stop(); err != nil {
+				t.Log(err)
+			}
+		}
 	}
 }

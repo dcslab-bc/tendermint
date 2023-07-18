@@ -1,6 +1,6 @@
 # End-to-End Tests
 
-Spins up and tests Tendermint networks in Docker Compose based on a testnet manifest. To run the CI testnet:
+Spins up and tests Ostracon networks in Docker Compose based on a testnet manifest. To run the CI testnet:
 
 ```sh
 make
@@ -50,9 +50,11 @@ The test runner has the following stages, which can also be executed explicitly 
 
 * `cleanup`: removes configuration files and Docker containers/networks.
 
+Auxiliary commands:
+
 * `logs`: outputs all node logs.
 
-* `tail`: tails (follows) node logs until cancelled.
+* `tail`: tails (follows) node logs until canceled.
 
 ## Tests
 
@@ -119,3 +121,43 @@ Docker does not enable IPv6 by default. To do so, enter the following in
   "fixed-cidr-v6": "2001:db8:1::/64"
 }
 ```
+
+## Benchmarking Testnets
+
+It is also possible to run a simple benchmark on a testnet. This is done through the `benchmark` command. This manages the entire process: setting up the environment, starting the test net, waiting for a considerable amount of blocks to be used (currently 100), and then returning the following metrics from the sample of the blockchain:
+
+- Average time to produce a block
+- Standard deviation of producing a block
+- Minimum and maximum time to produce a block
+
+## Running Individual Nodes
+
+The E2E test harness is designed to run several nodes of varying configurations within docker. It is also possible to run a single node in the case of running larger, geographically-dispersed testnets. To run a single node you can either run:
+
+**Built-in**
+
+```bash
+make node
+ostracon init validator
+OCHOME=$HOME/.ostracon ./build/node ./node/built-in.toml
+```
+
+To make things simpler the e2e application can also be run in the ostracon binary
+by running
+
+```bash
+ostracon start --proxy-app e2e
+```
+
+However this won't offer the same level of configurability of the application.
+
+**Socket**
+
+```bash
+make node
+ostracon init validator
+ostracon start
+./build/node ./node.socket.toml
+```
+
+Check `node/config.go` to see how the settings of the test application can be tweaked.

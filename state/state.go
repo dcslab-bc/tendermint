@@ -4,21 +4,22 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"time"
-
-	"github.com/gogo/protobuf/proto"
 
 	tmstate "github.com/tendermint/tendermint/proto/tendermint/state"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	tmversion "github.com/tendermint/tendermint/proto/tendermint/version"
-	"github.com/tendermint/tendermint/types"
-	tmtime "github.com/tendermint/tendermint/types/time"
-	"github.com/tendermint/tendermint/version"
+
+	"github.com/Finschia/ostracon/crypto"
+	ocstate "github.com/Finschia/ostracon/proto/ostracon/state"
+	"github.com/Finschia/ostracon/types"
+	tmtime "github.com/Finschia/ostracon/types/time"
+	"github.com/Finschia/ostracon/version"
 )
 
-// database keys
 var (
+	// database keys
 	stateKey = []byte("stateKey")
 )
 
@@ -31,14 +32,14 @@ var (
 var InitStateVersion = tmstate.Version{
 	Consensus: tmversion.Consensus{
 		Block: version.BlockProtocol,
-		App:   0,
+		App:   version.AppProtocol,
 	},
-	Software: version.TMCoreSemVer,
+	Software: version.OCCoreSemVer,
 }
 
 //-----------------------------------------------------------------------------
 
-// State is a short description of the latest committed block of the Tendermint consensus.
+// State is a short description of the latest committed block of the Ostracon consensus.
 // It keeps all information necessary to validate new blocks,
 // including the last validator set and the consensus params.
 // All fields are exposed so the struct can be easily serialized,
@@ -56,6 +57,9 @@ type State struct {
 	LastBlockHeight int64
 	LastBlockID     types.BlockID
 	LastBlockTime   time.Time
+
+	// vrf hash from proof
+	LastProofHash []byte
 
 	// LastValidators is used to validate block.LastCommit.
 	// Validators are persisted to the database separately every time they change,
@@ -80,6 +84,10 @@ type State struct {
 	AppHash []byte
 }
 
+func (state State) MakeHashMessage(round int32) []byte {
+	return types.MakeRoundHash(state.LastProofHash, state.LastBlockHeight, round)
+}
+
 // Copy makes a copy of the State for mutating.
 func (state State) Copy() State {
 
@@ -91,6 +99,8 @@ func (state State) Copy() State {
 		LastBlockHeight: state.LastBlockHeight,
 		LastBlockID:     state.LastBlockID,
 		LastBlockTime:   state.LastBlockTime,
+
+		LastProofHash: state.LastProofHash,
 
 		NextValidators:              state.NextValidators.Copy(),
 		Validators:                  state.Validators.Copy(),
@@ -119,7 +129,7 @@ func (state State) Bytes() []byte {
 	if err != nil {
 		panic(err)
 	}
-	bz, err := proto.Marshal(sm)
+	bz, err := sm.Marshal()
 	if err != nil {
 		panic(err)
 	}
@@ -132,12 +142,12 @@ func (state State) IsEmpty() bool {
 }
 
 // ToProto takes the local state type and returns the equivalent proto type
-func (state *State) ToProto() (*tmstate.State, error) {
+func (state *State) ToProto() (*ocstate.State, error) {
 	if state == nil {
 		return nil, errors.New("state is nil")
 	}
 
-	sm := new(tmstate.State)
+	sm := new(ocstate.State)
 
 	sm.Version = state.Version
 	sm.ChainID = state.ChainID
@@ -172,11 +182,13 @@ func (state *State) ToProto() (*tmstate.State, error) {
 	sm.LastResultsHash = state.LastResultsHash
 	sm.AppHash = state.AppHash
 
+	sm.LastProofHash = state.LastProofHash
+
 	return sm, nil
 }
 
-// StateFromProto takes a state proto message & returns the local state type
-func StateFromProto(pb *tmstate.State) (*State, error) { //nolint:golint
+// FromProto takes a state proto message & returns the local state type
+func FromProto(pb *ocstate.State) (*State, error) { //nolint:golint
 	if pb == nil {
 		return nil, errors.New("nil State")
 	}
@@ -223,6 +235,8 @@ func StateFromProto(pb *tmstate.State) (*State, error) { //nolint:golint
 	state.LastResultsHash = pb.LastResultsHash
 	state.AppHash = pb.AppHash
 
+	state.LastProofHash = pb.LastProofHash
+
 	return state, nil
 }
 
@@ -238,10 +252,12 @@ func (state State) MakeBlock(
 	commit *types.Commit,
 	evidence []types.Evidence,
 	proposerAddress []byte,
+	round int32,
+	proof crypto.Proof,
 ) (*types.Block, *types.PartSet) {
 
 	// Build base block with block data.
-	block := types.MakeBlock(height, txs, commit, evidence)
+	block := types.MakeBlock(height, txs, commit, evidence, state.Version.Consensus)
 
 	// Set time.
 	var timestamp time.Time
@@ -258,6 +274,12 @@ func (state State) MakeBlock(
 		state.Validators.Hash(), state.NextValidators.Hash(),
 		types.HashConsensusParams(state.ConsensusParams), state.AppHash, state.LastResultsHash,
 		proposerAddress,
+	)
+
+	// Fill rest of entropy with state data.
+	block.Entropy.Populate(
+		round,
+		proof,
 	)
 
 	return block, block.MakePartSet(types.BlockPartSizeBytes)
@@ -303,7 +325,7 @@ func MakeGenesisStateFromFile(genDocFile string) (State, error) {
 
 // MakeGenesisDocFromFile reads and unmarshals genesis doc from the given file.
 func MakeGenesisDocFromFile(genDocFile string) (*types.GenesisDoc, error) {
-	genDocJSON, err := ioutil.ReadFile(genDocFile)
+	genDocJSON, err := os.ReadFile(genDocFile)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't read GenesisDoc file: %v", err)
 	}
@@ -331,7 +353,7 @@ func MakeGenesisState(genDoc *types.GenesisDoc) (State, error) {
 			validators[i] = types.NewValidator(val.PubKey, val.Power)
 		}
 		validatorSet = types.NewValidatorSet(validators)
-		nextValidatorSet = types.NewValidatorSet(validators).CopyIncrementProposerPriority(1)
+		nextValidatorSet = types.NewValidatorSet(validators)
 	}
 
 	return State{
@@ -342,6 +364,9 @@ func MakeGenesisState(genDoc *types.GenesisDoc) (State, error) {
 		LastBlockHeight: 0,
 		LastBlockID:     types.BlockID{},
 		LastBlockTime:   genDoc.GenesisTime,
+
+		// genesis block use the hash of GenesisDoc instead for the `LastProofHash`
+		LastProofHash: genDoc.Hash(),
 
 		NextValidators:              nextValidatorSet,
 		Validators:                  validatorSet,

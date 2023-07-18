@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-
 	abci "github.com/tendermint/tendermint/abci/types"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
+
+	"github.com/stretchr/testify/assert"
 )
 
 var (
@@ -145,7 +145,7 @@ func TestConsensusParamsUpdate_AppVersion(t *testing.T) {
 	assert.EqualValues(t, 0, params.Version.AppVersion)
 
 	updated := UpdateConsensusParams(params,
-		&abci.ConsensusParams{Version: &tmproto.VersionParams{AppVersion: 1}})
+		&abci.ConsensusParams{Version: &tmproto.VersionParams{AppVersion: 77}})
 
-	assert.EqualValues(t, 1, updated.Version.AppVersion)
+	assert.EqualValues(t, 77, updated.Version.AppVersion)
 }

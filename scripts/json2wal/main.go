@@ -14,9 +14,9 @@ import (
 	"os"
 	"strings"
 
-	cs "github.com/tendermint/tendermint/consensus"
-	tmjson "github.com/tendermint/tendermint/libs/json"
-	"github.com/tendermint/tendermint/types"
+	cs "github.com/Finschia/ostracon/consensus"
+	tmjson "github.com/Finschia/ostracon/libs/json"
+	"github.com/Finschia/ostracon/types"
 )
 
 func main() {
@@ -37,7 +37,7 @@ func main() {
 	}
 	defer walFile.Close()
 
-	// the length of tendermint/wal/MsgInfo in the wal.json may exceed the defaultBufSize(4096) of bufio
+	// the length of ostracon/wal/MsgInfo in the wal.json may exceed the defaultBufSize(4096) of bufio
 	// because of the byte array in BlockPart
 	// leading to unmarshal error: unexpected end of JSON input
 	br := bufio.NewReaderSize(f, int(2*types.BlockPartSizeBytes))

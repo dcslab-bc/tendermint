@@ -3,11 +3,13 @@ package v2
 import (
 	"fmt"
 
-	bc "github.com/tendermint/tendermint/blockchain"
-	"github.com/tendermint/tendermint/p2p"
 	bcproto "github.com/tendermint/tendermint/proto/tendermint/blockchain"
-	"github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/types"
+
+	bc "github.com/Finschia/ostracon/blockchain"
+	"github.com/Finschia/ostracon/p2p"
+	ocbcproto "github.com/Finschia/ostracon/proto/ostracon/blockchain"
+	"github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/types"
 )
 
 type iIO interface {
@@ -91,7 +93,7 @@ func (sio *switchIO) sendBlockToPeer(block *types.Block, peerID p2p.ID) error {
 		return err
 	}
 
-	msgBytes, err := bc.EncodeMsg(&bcproto.BlockResponse{Block: bpb})
+	msgBytes, err := bc.EncodeMsg(&ocbcproto.BlockResponse{Block: bpb})
 	if err != nil {
 		return err
 	}

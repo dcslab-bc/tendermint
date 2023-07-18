@@ -11,23 +11,24 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	bcproto "github.com/tendermint/tendermint/proto/tendermint/blockchain"
 	dbm "github.com/tendermint/tm-db"
 
-	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/behaviour"
-	bc "github.com/tendermint/tendermint/blockchain"
-	cfg "github.com/tendermint/tendermint/config"
-	"github.com/tendermint/tendermint/libs/log"
-	"github.com/tendermint/tendermint/libs/service"
-	"github.com/tendermint/tendermint/mempool/mock"
-	"github.com/tendermint/tendermint/p2p"
-	"github.com/tendermint/tendermint/p2p/conn"
-	bcproto "github.com/tendermint/tendermint/proto/tendermint/blockchain"
-	"github.com/tendermint/tendermint/proxy"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/store"
-	"github.com/tendermint/tendermint/types"
-	tmtime "github.com/tendermint/tendermint/types/time"
+	abci "github.com/Finschia/ostracon/abci/types"
+	"github.com/Finschia/ostracon/behaviour"
+	bc "github.com/Finschia/ostracon/blockchain"
+	cfg "github.com/Finschia/ostracon/config"
+	"github.com/Finschia/ostracon/libs/log"
+	"github.com/Finschia/ostracon/libs/service"
+	"github.com/Finschia/ostracon/mempool/mock"
+	"github.com/Finschia/ostracon/p2p"
+	"github.com/Finschia/ostracon/p2p/conn"
+	"github.com/Finschia/ostracon/proxy"
+	sm "github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/store"
+	"github.com/Finschia/ostracon/types"
+	tmtime "github.com/Finschia/ostracon/types/time"
 )
 
 type mockPeer struct {
@@ -59,19 +60,24 @@ func (mp mockPeer) TrySend(byte, []byte) bool { return true }
 func (mp mockPeer) Set(string, interface{}) {}
 func (mp mockPeer) Get(string) interface{}  { return struct{}{} }
 
-//nolint:unused
+func (mp mockPeer) String() string { return fmt.Sprintf("%v", mp.id) }
+
+// nolint:unused // ignore
 type mockBlockStore struct {
 	blocks map[int64]*types.Block
 }
 
+// nolint:unused // ignore
 func (ml *mockBlockStore) Height() int64 {
 	return int64(len(ml.blocks))
 }
 
+// nolint:unused // ignore
 func (ml *mockBlockStore) LoadBlock(height int64) *types.Block {
 	return ml.blocks[height]
 }
 
+// nolint:unused // ignore
 func (ml *mockBlockStore) SaveBlock(block *types.Block, part *types.PartSet, commit *types.Commit) {
 	ml.blocks[block.Height] = block
 }
@@ -81,7 +87,7 @@ type mockBlockApplier struct {
 
 // XXX: Add whitelist/blacklist?
 func (mba *mockBlockApplier) ApplyBlock(
-	state sm.State, blockID types.BlockID, block *types.Block,
+	state sm.State, blockID types.BlockID, block *types.Block, times *sm.CommitStepTimes,
 ) (sm.State, int64, error) {
 	state.LastBlockHeight++
 	return state, 0, nil
@@ -350,7 +356,6 @@ func TestReactorHelperMode(t *testing.T) {
 	var (
 		channelID = byte(0x40)
 	)
-
 	config := cfg.ResetTestRoot("blockchain_reactor_v2_test")
 	defer os.RemoveAll(config.RootDir)
 	genDoc, privVals := randGenesisDoc(config.ChainID(), 1, false, 30)
@@ -452,8 +457,11 @@ func makeTxs(height int64) (txs []types.Tx) {
 	return txs
 }
 
-func makeBlock(height int64, state sm.State, lastCommit *types.Commit) *types.Block {
-	block, _ := state.MakeBlock(height, makeTxs(height), lastCommit, nil, state.Validators.GetProposer().Address)
+func makeBlock(privVal types.PrivValidator, height int64, state sm.State, lastCommit *types.Commit) *types.Block {
+	message := state.MakeHashMessage(0)
+	proof, _ := privVal.GenerateVRFProof(message)
+	proposerAddr := state.Validators.SelectProposer(state.LastProofHash, height, 0).Address
+	block, _ := state.MakeBlock(height, makeTxs(height), lastCommit, nil, proposerAddr, 0, proof)
 	return block
 }
 
@@ -536,12 +544,12 @@ func newReactorStore(
 				lastBlockMeta.BlockID, []types.CommitSig{vote.CommitSig()})
 		}
 
-		thisBlock := makeBlock(blockHeight, state, lastCommit)
+		thisBlock := makeBlock(privVals[0], blockHeight, state, lastCommit)
 
 		thisParts := thisBlock.MakePartSet(types.BlockPartSizeBytes)
 		blockID := types.BlockID{Hash: thisBlock.Hash(), PartSetHeader: thisParts.Header()}
 
-		state, _, err = blockExec.ApplyBlock(state, blockID, thisBlock)
+		state, _, err = blockExec.ApplyBlock(state, blockID, thisBlock, nil)
 		if err != nil {
 			panic(fmt.Errorf("error apply block: %w", err))
 		}

@@ -1,12 +1,12 @@
 package state
 
 import (
+	abci "github.com/tendermint/tendermint/abci/types"
+	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	dbm "github.com/tendermint/tm-db"
 
-	abci "github.com/tendermint/tendermint/abci/types"
-	tmstate "github.com/tendermint/tendermint/proto/tendermint/state"
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	"github.com/tendermint/tendermint/types"
+	tmstate "github.com/Finschia/ostracon/proto/ostracon/state"
+	"github.com/Finschia/ostracon/types"
 )
 
 //
@@ -28,10 +28,11 @@ func UpdateState(
 	state State,
 	blockID types.BlockID,
 	header *types.Header,
+	entropy *types.Entropy,
 	abciResponses *tmstate.ABCIResponses,
 	validatorUpdates []*types.Validator,
 ) (State, error) {
-	return updateState(state, blockID, header, abciResponses, validatorUpdates)
+	return updateState(state, blockID, header, entropy, abciResponses, validatorUpdates)
 }
 
 // ValidateValidatorUpdates is an alias for validateValidatorUpdates exported
@@ -42,7 +43,20 @@ func ValidateValidatorUpdates(abciUpdates []abci.ValidatorUpdate, params tmproto
 
 // SaveValidatorsInfo is an alias for the private saveValidatorsInfo method in
 // store.go, exported exclusively and explicitly for testing.
-func SaveValidatorsInfo(db dbm.DB, height, lastHeightChanged int64, valSet *types.ValidatorSet) error {
+func SaveValidatorsInfo(
+	db dbm.DB,
+	height, lastHeightChanged int64,
+	proofHash []byte,
+	valSet *types.ValidatorSet,
+) error {
 	stateStore := dbStore{db}
+	if err := db.Set(calcProofHashKey(height-1), proofHash); err != nil {
+		return err
+	}
 	return stateStore.saveValidatorsInfo(height, lastHeightChanged, valSet)
+}
+
+func SaveProofHash(db dbm.DB, height int64, proofHash []byte) error {
+	stateStore := dbStore{db}
+	return stateStore.saveProofHash(height, proofHash)
 }

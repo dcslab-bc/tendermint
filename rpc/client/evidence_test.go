@@ -10,15 +10,18 @@ import (
 	"github.com/stretchr/testify/require"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	cryptoenc "github.com/tendermint/tendermint/crypto/encoding"
-	"github.com/tendermint/tendermint/crypto/tmhash"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
-	"github.com/tendermint/tendermint/privval"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	"github.com/tendermint/tendermint/rpc/client"
-	rpctest "github.com/tendermint/tendermint/rpc/test"
-	"github.com/tendermint/tendermint/types"
+
+	"github.com/Finschia/ostracon/abci/example/kvstore"
+	ocabci "github.com/Finschia/ostracon/abci/types"
+	"github.com/Finschia/ostracon/crypto/ed25519"
+	cryptoenc "github.com/Finschia/ostracon/crypto/encoding"
+	"github.com/Finschia/ostracon/crypto/tmhash"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
+	"github.com/Finschia/ostracon/privval"
+	"github.com/Finschia/ostracon/rpc/client"
+	rpctest "github.com/Finschia/ostracon/rpc/test"
+	"github.com/Finschia/ostracon/types"
 )
 
 // For some reason the empty node used in tests has a time of
@@ -113,6 +116,11 @@ func makeEvidences(
 }
 
 func TestBroadcastEvidence_DuplicateVoteEvidence(t *testing.T) {
+	// https://github.com/tendermint/tendermint/pull/6678
+	// previous versions of this test used a shared fixture with
+	// other tests, and in this version we give it a little time
+	// for the node to make progress before running the test
+	time.Sleep(100 * time.Millisecond)
 	var (
 		config  = rpctest.GetConfig()
 		chainID = config.ChainID()
@@ -134,16 +142,20 @@ func TestBroadcastEvidence_DuplicateVoteEvidence(t *testing.T) {
 
 		ed25519pub := pv.Key.PubKey.(ed25519.PubKey)
 		rawpub := ed25519pub.Bytes()
-		result2, err := c.ABCIQuery(context.Background(), "/val", rawpub)
+		publicKey, err := cryptoenc.PubKeyToProto(pv.Key.PubKey)
+		assert.NoError(t, err)
+		pubStr, _ := kvstore.MakeValSetChangeTxAndMore(publicKey, 10)
+		// See kvstore.PersistentKVStoreApplication#Query
+		result2, err := c.ABCIQuery(context.Background(), "/val", []byte(pubStr))
 		require.NoError(t, err)
 		qres := result2.Response
 		require.True(t, qres.IsOK())
 
 		var v abci.ValidatorUpdate
-		err = abci.ReadMessage(bytes.NewReader(qres.Value), &v)
+		err = ocabci.ReadMessage(bytes.NewReader(qres.Value), &v)
 		require.NoError(t, err, "Error reading query result, value %v", qres.Value)
 
-		pk, err := cryptoenc.PubKeyFromProto(v.PubKey)
+		pk, err := cryptoenc.PubKeyFromProto(&v.PubKey)
 		require.NoError(t, err)
 
 		require.EqualValues(t, rawpub, pk, "Stored PubKey not equal with expected, value %v", string(qres.Value))

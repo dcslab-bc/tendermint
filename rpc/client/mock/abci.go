@@ -4,18 +4,20 @@ import (
 	"context"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/libs/bytes"
-	"github.com/tendermint/tendermint/proxy"
-	"github.com/tendermint/tendermint/rpc/client"
-	ctypes "github.com/tendermint/tendermint/rpc/core/types"
-	"github.com/tendermint/tendermint/types"
+
+	ocabci "github.com/Finschia/ostracon/abci/types"
+	"github.com/Finschia/ostracon/libs/bytes"
+	"github.com/Finschia/ostracon/proxy"
+	"github.com/Finschia/ostracon/rpc/client"
+	ctypes "github.com/Finschia/ostracon/rpc/core/types"
+	"github.com/Finschia/ostracon/types"
 )
 
 // ABCIApp will send all abci related request to the named app,
 // so you can test app behavior from a client without needing
-// an entire tendermint node
+// an entire ostracon node
 type ABCIApp struct {
-	App abci.Application
+	App ocabci.Application
 }
 
 var (
@@ -51,7 +53,7 @@ func (a ABCIApp) ABCIQueryWithOptions(
 // TODO: Make it wait for a commit and set res.Height appropriately.
 func (a ABCIApp) BroadcastTxCommit(ctx context.Context, tx types.Tx) (*ctypes.ResultBroadcastTxCommit, error) {
 	res := ctypes.ResultBroadcastTxCommit{}
-	res.CheckTx = a.App.CheckTx(abci.RequestCheckTx{Tx: tx})
+	res.CheckTx = a.App.CheckTxSync(abci.RequestCheckTx{Tx: tx})
 	if res.CheckTx.IsErr() {
 		return &res, nil
 	}
@@ -61,11 +63,13 @@ func (a ABCIApp) BroadcastTxCommit(ctx context.Context, tx types.Tx) (*ctypes.Re
 }
 
 func (a ABCIApp) BroadcastTxAsync(ctx context.Context, tx types.Tx) (*ctypes.ResultBroadcastTx, error) {
-	c := a.App.CheckTx(abci.RequestCheckTx{Tx: tx})
+	chRes := make(chan ocabci.ResponseCheckTx, 1)
+	a.App.CheckTxAsync(abci.RequestCheckTx{Tx: tx}, func(res ocabci.ResponseCheckTx) {
+		chRes <- res
+	})
+	c := <-chRes
 	// and this gets written in a background thread...
-	if !c.IsErr() {
-		go func() { a.App.DeliverTx(abci.RequestDeliverTx{Tx: tx}) }()
-	}
+	go func() { a.App.DeliverTx(abci.RequestDeliverTx{Tx: tx}) }()
 	return &ctypes.ResultBroadcastTx{
 		Code:      c.Code,
 		Data:      c.Data,
@@ -76,7 +80,7 @@ func (a ABCIApp) BroadcastTxAsync(ctx context.Context, tx types.Tx) (*ctypes.Res
 }
 
 func (a ABCIApp) BroadcastTxSync(ctx context.Context, tx types.Tx) (*ctypes.ResultBroadcastTx, error) {
-	c := a.App.CheckTx(abci.RequestCheckTx{Tx: tx})
+	c := a.App.CheckTxSync(abci.RequestCheckTx{Tx: tx})
 	// and this gets written in a background thread...
 	if !c.IsErr() {
 		go func() { a.App.DeliverTx(abci.RequestDeliverTx{Tx: tx}) }()
@@ -92,7 +96,7 @@ func (a ABCIApp) BroadcastTxSync(ctx context.Context, tx types.Tx) (*ctypes.Resu
 
 // ABCIMock will send all abci related request to the named app,
 // so you can test app behavior from a client without needing
-// an entire tendermint node
+// an entire ostracon node
 type ABCIMock struct {
 	Info            Call
 	Query           Call

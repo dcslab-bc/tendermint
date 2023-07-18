@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tendermint/tendermint/p2p"
-	ctypes "github.com/tendermint/tendermint/rpc/core/types"
-	rpctypes "github.com/tendermint/tendermint/rpc/jsonrpc/types"
+	"github.com/Finschia/ostracon/p2p"
+	ctypes "github.com/Finschia/ostracon/rpc/core/types"
+	rpctypes "github.com/Finschia/ostracon/rpc/jsonrpc/types"
 )
 
 // NetInfo returns network info.
@@ -94,7 +94,33 @@ func UnsafeDialPeers(ctx *rpctypes.Context, peers []string, persistent, uncondit
 // Genesis returns genesis file.
 // More: https://docs.tendermint.com/master/rpc/#/Info/genesis
 func Genesis(ctx *rpctypes.Context) (*ctypes.ResultGenesis, error) {
+	if len(env.genChunks) > 1 {
+		return nil, errors.New("genesis response is large, please use the genesis_chunked API instead")
+	}
+
 	return &ctypes.ResultGenesis{Genesis: env.GenDoc}, nil
+}
+
+func GenesisChunked(ctx *rpctypes.Context, chunk uint) (*ctypes.ResultGenesisChunk, error) {
+	if env.genChunks == nil {
+		return nil, fmt.Errorf("service configuration error, genesis chunks are not initialized")
+	}
+
+	if len(env.genChunks) == 0 {
+		return nil, fmt.Errorf("service configuration error, there are no chunks")
+	}
+
+	id := int(chunk)
+
+	if id > len(env.genChunks)-1 {
+		return nil, fmt.Errorf("there are %d chunks, %d is invalid", len(env.genChunks)-1, id)
+	}
+
+	return &ctypes.ResultGenesisChunk{
+		TotalChunks: len(env.genChunks),
+		ChunkNumber: id,
+		Data:        env.genChunks[id],
+	}, nil
 }
 
 func getIDs(peers []string) ([]string, error) {

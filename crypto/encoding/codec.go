@@ -3,17 +3,18 @@ package encoding
 import (
 	"fmt"
 
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	"github.com/tendermint/tendermint/crypto/secp256k1"
-	"github.com/tendermint/tendermint/libs/json"
 	pc "github.com/tendermint/tendermint/proto/tendermint/crypto"
+
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/crypto/ed25519"
+	"github.com/Finschia/ostracon/crypto/secp256k1"
+	"github.com/Finschia/ostracon/libs/json"
 )
 
 func init() {
-	json.RegisterType((*pc.PublicKey)(nil), "tendermint.crypto.PublicKey")
-	json.RegisterType((*pc.PublicKey_Ed25519)(nil), "tendermint.crypto.PublicKey_Ed25519")
-	json.RegisterType((*pc.PublicKey_Secp256K1)(nil), "tendermint.crypto.PublicKey_Secp256K1")
+	json.RegisterType((*pc.PublicKey)(nil), "ostracon.crypto.PublicKey")
+	json.RegisterType((*pc.PublicKey_Ed25519)(nil), "ostracon.crypto.PublicKey_Ed25519")
+	json.RegisterType((*pc.PublicKey_Secp256K1)(nil), "ostracon.crypto.PublicKey_Secp256K1")
 }
 
 // PubKeyToProto takes crypto.PubKey and transforms it to a protobuf Pubkey
@@ -39,7 +40,7 @@ func PubKeyToProto(k crypto.PubKey) (pc.PublicKey, error) {
 }
 
 // PubKeyFromProto takes a protobuf Pubkey and transforms it to a crypto.Pubkey
-func PubKeyFromProto(k pc.PublicKey) (crypto.PubKey, error) {
+func PubKeyFromProto(k *pc.PublicKey) (crypto.PubKey, error) {
 	switch k := k.Sum.(type) {
 	case *pc.PublicKey_Ed25519:
 		if len(k.Ed25519) != ed25519.PubKeySize {

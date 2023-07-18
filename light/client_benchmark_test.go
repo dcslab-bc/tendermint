@@ -5,13 +5,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Finschia/ostracon/libs/sync"
+
 	dbm "github.com/tendermint/tm-db"
 
-	"github.com/tendermint/tendermint/libs/log"
-	"github.com/tendermint/tendermint/light"
-	"github.com/tendermint/tendermint/light/provider"
-	mockp "github.com/tendermint/tendermint/light/provider/mock"
-	dbs "github.com/tendermint/tendermint/light/store/db"
+	"github.com/Finschia/ostracon/libs/log"
+	"github.com/Finschia/ostracon/light"
+	"github.com/Finschia/ostracon/light/provider"
+	mockp "github.com/Finschia/ostracon/light/provider/mock"
+	dbs "github.com/Finschia/ostracon/light/store/db"
+	"github.com/Finschia/ostracon/types"
 )
 
 // NOTE: block is produced every minute. Make sure the verification time
@@ -22,11 +25,23 @@ import (
 //
 // Remember that none of these benchmarks account for network latency.
 var (
-	benchmarkFullNode = mockp.New(genMockNode(chainID, 1000, 100, 1, bTime))
-	genesisBlock, _   = benchmarkFullNode.LightBlock(context.Background(), 1)
+	mu sync.Mutex
+	// Shouldn't initialize variables here since affecting test (this is for benchmark test)
+	benchmarkFullNode *mockp.Mock
+	genesisBlock      *types.LightBlock
 )
 
+func setupData() {
+	mu.Lock()
+	defer mu.Unlock()
+	if benchmarkFullNode == nil || genesisBlock == nil {
+		benchmarkFullNode = mockp.New(genMockNode(chainID, 1000, 100, 1, bTime))
+		genesisBlock, _ = benchmarkFullNode.LightBlock(context.Background(), 1)
+	}
+}
+
 func BenchmarkSequence(b *testing.B) {
+	setupData()
 	c, err := light.NewClient(
 		context.Background(),
 		chainID,
@@ -55,6 +70,7 @@ func BenchmarkSequence(b *testing.B) {
 }
 
 func BenchmarkBisection(b *testing.B) {
+	setupData()
 	c, err := light.NewClient(
 		context.Background(),
 		chainID,
@@ -82,6 +98,7 @@ func BenchmarkBisection(b *testing.B) {
 }
 
 func BenchmarkBackwards(b *testing.B) {
+	setupData()
 	trustedBlock, _ := benchmarkFullNode.LightBlock(context.Background(), 0)
 	c, err := light.NewClient(
 		context.Background(),

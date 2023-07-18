@@ -3,7 +3,7 @@ package json_test
 import (
 	"time"
 
-	"github.com/tendermint/tendermint/libs/json"
+	"github.com/Finschia/ostracon/libs/json"
 )
 
 // Register Car, an instance of the Vehicle interface.
@@ -61,7 +61,6 @@ func (c CustomValue) MarshalJSON() ([]byte, error) {
 }
 
 func (c CustomValue) UnmarshalJSON(bz []byte) error {
-	c.Value = "custom"
 	return nil
 }
 

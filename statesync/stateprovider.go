@@ -6,19 +6,21 @@ import (
 	"strings"
 	"time"
 
+	tmstate "github.com/tendermint/tendermint/proto/tendermint/state"
 	dbm "github.com/tendermint/tm-db"
 
-	"github.com/tendermint/tendermint/libs/log"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
-	"github.com/tendermint/tendermint/light"
-	lightprovider "github.com/tendermint/tendermint/light/provider"
-	lighthttp "github.com/tendermint/tendermint/light/provider/http"
-	lightrpc "github.com/tendermint/tendermint/light/rpc"
-	lightdb "github.com/tendermint/tendermint/light/store/db"
-	tmstate "github.com/tendermint/tendermint/proto/tendermint/state"
-	rpchttp "github.com/tendermint/tendermint/rpc/client/http"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/crypto/vrf"
+	"github.com/Finschia/ostracon/libs/log"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
+	"github.com/Finschia/ostracon/light"
+	lightprovider "github.com/Finschia/ostracon/light/provider"
+	lighthttp "github.com/Finschia/ostracon/light/provider/http"
+	lightrpc "github.com/Finschia/ostracon/light/rpc"
+	lightdb "github.com/Finschia/ostracon/light/store/db"
+	rpchttp "github.com/Finschia/ostracon/rpc/client/http"
+	sm "github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/types"
+	"github.com/Finschia/ostracon/version"
 )
 
 //go:generate mockery --case underscore --name StateProvider
@@ -53,6 +55,7 @@ func NewLightClientStateProvider(
 	trustOptions light.TrustOptions,
 	logger log.Logger,
 ) (StateProvider, error) {
+	servers = uniqServers(servers)
 	if len(servers) < 2 {
 		return nil, fmt.Errorf("at least 2 RPC servers are required, got %v", len(servers))
 	}
@@ -84,6 +87,22 @@ func NewLightClientStateProvider(
 	}, nil
 }
 
+func uniqServers(servers []string) []string {
+	size := len(servers)
+	if size < 2 {
+		return servers
+	}
+	serversSet := make(map[string]struct{}, size)
+	uniqServers := make([]string, 0, size)
+	for _, server := range servers {
+		if _, ok := serversSet[server]; !ok {
+			serversSet[server] = struct{}{}
+			uniqServers = append(uniqServers, server)
+		}
+	}
+	return uniqServers
+}
+
 // AppHash implements StateProvider.
 func (s *lightClientStateProvider) AppHash(ctx context.Context, height uint64) ([]byte, error) {
 	s.Lock()
@@ -103,10 +122,6 @@ func (s *lightClientStateProvider) AppHash(ctx context.Context, height uint64) (
 	// that the state provider has access to the necessary data for the height.
 	// We piggyback on AppHash() since it's called when adding snapshots to the pool.
 	_, err = s.lc.VerifyLightBlockAtHeight(ctx, int64(height+2), time.Now())
-	if err != nil {
-		return nil, err
-	}
-	_, err = s.lc.VerifyLightBlockAtHeight(ctx, int64(height), time.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -159,6 +174,10 @@ func (s *lightClientStateProvider) State(ctx context.Context, height uint64) (sm
 		return sm.State{}, err
 	}
 
+	state.Version = tmstate.Version{
+		Consensus: currentLightBlock.Version,
+		Software:  version.OCCoreSemVer,
+	}
 	state.LastBlockHeight = lastLightBlock.Height
 	state.LastBlockTime = lastLightBlock.Time
 	state.LastBlockID = lastLightBlock.Commit.BlockID
@@ -169,7 +188,7 @@ func (s *lightClientStateProvider) State(ctx context.Context, height uint64) (sm
 	state.NextValidators = nextLightBlock.ValidatorSet
 	state.LastHeightValidatorsChanged = nextLightBlock.Height
 
-	// We'll also need to fetch consensus params via RPC, using light client verification.
+	// We'll also need to fetch consensus params and last proof hash via RPC, using light client verification.
 	primaryURL, ok := s.providers[s.lc.Primary()]
 	if !ok || primaryURL == "" {
 		return sm.State{}, fmt.Errorf("could not find address for primary light client provider")
@@ -179,14 +198,26 @@ func (s *lightClientStateProvider) State(ctx context.Context, height uint64) (sm
 		return sm.State{}, fmt.Errorf("unable to create RPC client: %w", err)
 	}
 	rpcclient := lightrpc.NewClient(primaryRPC, s.lc)
-	result, err := rpcclient.ConsensusParams(ctx, &currentLightBlock.Height)
+
+	resultConsensusParams, err := rpcclient.ConsensusParams(ctx, &currentLightBlock.Height)
 	if err != nil {
 		return sm.State{}, fmt.Errorf("unable to fetch consensus parameters for height %v: %w",
 			nextLightBlock.Height, err)
 	}
-	state.ConsensusParams = result.ConsensusParams
+	state.ConsensusParams = resultConsensusParams.ConsensusParams
+	state.Version.Consensus.App = state.ConsensusParams.Version.AppVersion
 	state.LastHeightConsensusParamsChanged = currentLightBlock.Height
 
+	resultBlock, err := rpcclient.Block(ctx, &lastLightBlock.Height)
+	if err != nil {
+		return sm.State{}, fmt.Errorf("unable to fetch block for height %v: %w",
+			lastLightBlock.Height, err)
+	}
+	proofHash, err := vrf.ProofToHash(resultBlock.Block.Proof.Bytes())
+	if err != nil {
+		return sm.State{}, err
+	}
+	state.LastProofHash = proofHash
 	return state, nil
 }
 

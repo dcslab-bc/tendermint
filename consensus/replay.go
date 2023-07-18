@@ -9,11 +9,12 @@ import (
 	"time"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/crypto/merkle"
-	"github.com/tendermint/tendermint/libs/log"
-	"github.com/tendermint/tendermint/proxy"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/types"
+
+	"github.com/Finschia/ostracon/crypto/merkle"
+	"github.com/Finschia/ostracon/libs/log"
+	"github.com/Finschia/ostracon/proxy"
+	sm "github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/types"
 )
 
 var crc32c = crc32.MakeTable(crc32.Castagnoli)
@@ -261,6 +262,7 @@ func (h *Handshaker) Handshake(proxyApp proxy.AppConns) error {
 
 	// Only set the version if there is no existing state.
 	if h.initialState.LastBlockHeight == 0 {
+		h.initialState.ConsensusParams.Version.AppVersion = res.AppVersion
 		h.initialState.Version.Consensus.App = res.AppVersion
 	}
 
@@ -270,7 +272,7 @@ func (h *Handshaker) Handshake(proxyApp proxy.AppConns) error {
 		return fmt.Errorf("error on replay: %v", err)
 	}
 
-	h.logger.Info("Completed ABCI Handshake - Tendermint and App are synced",
+	h.logger.Info("Completed ABCI Handshake - Ostracon and App are synced",
 		"appHeight", blockHeight, "appHash", appHash)
 
 	// TODO: (on restart) replay mempool
@@ -306,8 +308,8 @@ func (h *Handshaker) ReplayBlocks(
 			validators[i] = types.NewValidator(val.PubKey, val.Power)
 		}
 		validatorSet := types.NewValidatorSet(validators)
-		nextVals := types.TM2PB.ValidatorUpdates(validatorSet)
-		csParams := types.TM2PB.ConsensusParams(h.genDoc.ConsensusParams)
+		nextVals := types.OC2PB.ValidatorUpdates(validatorSet)
+		csParams := types.OC2PB.ConsensusParams(h.genDoc.ConsensusParams)
 		req := abci.RequestInitChain{
 			Time:            h.genDoc.GenesisTime,
 			ChainId:         h.genDoc.ChainID,
@@ -332,12 +334,12 @@ func (h *Handshaker) ReplayBlocks(
 			}
 			// If the app returned validators or consensus params, update the state.
 			if len(res.Validators) > 0 {
-				vals, err := types.PB2TM.ValidatorUpdates(res.Validators)
+				vals, err := types.PB2OC.ValidatorUpdates(res.Validators)
 				if err != nil {
 					return nil, err
 				}
 				state.Validators = types.NewValidatorSet(vals)
-				state.NextValidators = types.NewValidatorSet(vals).CopyIncrementProposerPriority(1)
+				state.NextValidators = types.NewValidatorSet(vals)
 			} else if len(h.genDoc.Validators) == 0 {
 				// If validator set is not set in genesis and still empty after InitChain, exit.
 				return nil, fmt.Errorf("validator set is nil in genesis and still empty after InitChain")
@@ -374,11 +376,11 @@ func (h *Handshaker) ReplayBlocks(
 		return appHash, sm.ErrAppBlockHeightTooHigh{CoreHeight: storeBlockHeight, AppHeight: appBlockHeight}
 
 	case storeBlockHeight < stateBlockHeight:
-		// the state should never be ahead of the store (this is under tendermint's control)
+		// the state should never be ahead of the store (this is under ostracon's control)
 		panic(fmt.Sprintf("StateBlockHeight (%d) > StoreBlockHeight (%d)", stateBlockHeight, storeBlockHeight))
 
 	case storeBlockHeight > stateBlockHeight+1:
-		// store should be at most one ahead of the state (this is under tendermint's control)
+		// store should be at most one ahead of the state (this is under ostracon's control)
 		panic(fmt.Sprintf("StoreBlockHeight (%d) > StateBlockHeight + 1 (%d)", storeBlockHeight, stateBlockHeight+1))
 	}
 
@@ -386,7 +388,7 @@ func (h *Handshaker) ReplayBlocks(
 	// Now either store is equal to state, or one ahead.
 	// For each, consider all cases of where the app could be, given app <= store
 	if storeBlockHeight == stateBlockHeight {
-		// Tendermint ran Commit and saved the state.
+		// Ostracon ran Commit and saved the state.
 		// Either the app is asking for replay, or we're all synced up.
 		if appBlockHeight < storeBlockHeight {
 			// the app is behind, so replay blocks, but no need to go through WAL (state is already synced to store)
@@ -468,7 +470,13 @@ func (h *Handshaker) replayBlocks(
 			assertAppHashEqualsOneFromBlock(appHash, block)
 		}
 
-		appHash, err = sm.ExecCommitBlock(proxyApp.Consensus(), block, h.logger, h.stateStore, h.genDoc.InitialHeight)
+		appHash, err = sm.ExecCommitBlock(
+			proxyApp.Consensus(),
+			block,
+			h.logger,
+			h.stateStore,
+			h.genDoc.InitialHeight,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -478,6 +486,7 @@ func (h *Handshaker) replayBlocks(
 
 	if mutateState {
 		// sync the final block
+		h.logger.Info("Replaying final block using real app", "height", storeBlockHeight)
 		state, err = h.replayBlock(state, storeBlockHeight, proxyApp.Consensus())
 		if err != nil {
 			return nil, err
@@ -493,14 +502,20 @@ func (h *Handshaker) replayBlocks(
 func (h *Handshaker) replayBlock(state sm.State, height int64, proxyApp proxy.AppConnConsensus) (sm.State, error) {
 	block := h.store.LoadBlock(height)
 	meta := h.store.LoadBlockMeta(height)
+	var err error
+	consensusParams, err := h.stateStore.LoadConsensusParams(height)
+	if err != nil {
+		return sm.State{}, err
+	}
+	state.ConsensusParams = consensusParams
+	state.Version.Consensus.App = consensusParams.Version.AppVersion
 
 	// Use stubs for both mempool and evidence pool since no transactions nor
 	// evidence are needed here - block already exists.
 	blockExec := sm.NewBlockExecutor(h.stateStore, h.logger, proxyApp, emptyMempool{}, sm.EmptyEvidencePool{})
 	blockExec.SetEventBus(h.eventBus)
 
-	var err error
-	state, _, err = blockExec.ApplyBlock(state, meta.BlockID, block)
+	state, _, err = blockExec.ApplyBlock(state, meta.BlockID, block, nil)
 	if err != nil {
 		return sm.State{}, err
 	}
@@ -527,7 +542,7 @@ func assertAppHashEqualsOneFromState(appHash []byte, state sm.State) {
 
 State: %v
 
-Did you reset Tendermint without resetting your application's data?`,
+Did you reset Ostracon without resetting your application's data?`,
 			appHash, state.AppHash, state))
 	}
 }

@@ -11,18 +11,18 @@ import (
 
 	dbm "github.com/tendermint/tm-db"
 
-	"github.com/tendermint/tendermint/abci/example/kvstore"
-	"github.com/tendermint/tendermint/libs/log"
-	"github.com/tendermint/tendermint/light"
-	"github.com/tendermint/tendermint/light/provider"
-	httpp "github.com/tendermint/tendermint/light/provider/http"
-	dbs "github.com/tendermint/tendermint/light/store/db"
-	rpctest "github.com/tendermint/tendermint/rpc/test"
+	"github.com/Finschia/ostracon/abci/example/kvstore"
+	"github.com/Finschia/ostracon/libs/log"
+	"github.com/Finschia/ostracon/light"
+	"github.com/Finschia/ostracon/light/provider"
+	httpp "github.com/Finschia/ostracon/light/provider/http"
+	dbs "github.com/Finschia/ostracon/light/store/db"
+	rpctest "github.com/Finschia/ostracon/rpc/test"
 )
 
 // Automatically getting new headers and verifying them.
 func ExampleClient_Update() {
-	// give Tendermint time to generate some blocks
+	// give Ostracon time to generate some blocks
 	time.Sleep(5 * time.Second)
 
 	dbDir, err := ioutil.TempDir("", "light-client-example")
@@ -90,7 +90,7 @@ func ExampleClient_Update() {
 
 // Manually getting light blocks and verifying them.
 func ExampleClient_VerifyLightBlockAtHeight() {
-	// give Tendermint time to generate some blocks
+	// give Ostracon time to generate some blocks
 	time.Sleep(5 * time.Second)
 
 	dbDir, err := ioutil.TempDir("", "light-client-example")
@@ -156,13 +156,13 @@ func ExampleClient_VerifyLightBlockAtHeight() {
 }
 
 func TestMain(m *testing.M) {
-	// start a tendermint node (and kvstore) in the background to test against
+	// start an ostracon node (and kvstore) in the background to test against
 	app := kvstore.NewApplication()
-	node := rpctest.StartTendermint(app, rpctest.SuppressStdout)
+	node := rpctest.StartOstracon(app, rpctest.SuppressStdout)
 
 	code := m.Run()
 
 	// and shut down proper at the end
-	rpctest.StopTendermint(node)
+	rpctest.StopOstracon(node)
 	os.Exit(code)
 }

@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	e2e "github.com/tendermint/tendermint/test/e2e/pkg"
+	e2e "github.com/Finschia/ostracon/test/e2e/pkg"
 )
 
 // Tests that block headers are identical across nodes where present.
@@ -37,8 +37,12 @@ func TestBlock_Header(t *testing.T) {
 			}
 			resp, err := client.Block(ctx, &block.Header.Height)
 			require.NoError(t, err)
+
 			require.Equal(t, block, resp.Block,
-				"block mismatch for height %v", block.Header.Height)
+				"block mismatch for height %d", block.Header.Height)
+
+			require.NoError(t, resp.Block.ValidateBasic(),
+				"block at height %d is invalid", block.Header.Height)
 		}
 	})
 }

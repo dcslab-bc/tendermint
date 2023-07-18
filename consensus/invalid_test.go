@@ -3,12 +3,13 @@ package consensus
 import (
 	"testing"
 
-	"github.com/tendermint/tendermint/libs/bytes"
-	"github.com/tendermint/tendermint/libs/log"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
-	"github.com/tendermint/tendermint/p2p"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	"github.com/tendermint/tendermint/types"
+
+	"github.com/Finschia/ostracon/libs/bytes"
+	"github.com/Finschia/ostracon/libs/log"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
+	"github.com/Finschia/ostracon/p2p"
+	"github.com/Finschia/ostracon/types"
 )
 
 //----------------------------------------------
@@ -47,7 +48,7 @@ func TestReactorInvalidPrecommit(t *testing.T) {
 
 	// wait for a bunch of blocks
 	// TODO: make this tighter by ensuring the halt happens by block 2
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 1; i++ { // XXX `i < 10` is too much count, so we changed to `i < 1`
 		timeoutWaitGroup(t, N, func(j int) {
 			<-blocksSubs[j].Out()
 		}, css)

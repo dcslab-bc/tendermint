@@ -2,6 +2,7 @@ package statesync
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -10,20 +11,25 @@ import (
 	"github.com/stretchr/testify/require"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/libs/log"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
-	"github.com/tendermint/tendermint/p2p"
-	p2pmocks "github.com/tendermint/tendermint/p2p/mocks"
 	tmstate "github.com/tendermint/tendermint/proto/tendermint/state"
 	ssproto "github.com/tendermint/tendermint/proto/tendermint/statesync"
 	tmversion "github.com/tendermint/tendermint/proto/tendermint/version"
-	"github.com/tendermint/tendermint/proxy"
-	proxymocks "github.com/tendermint/tendermint/proxy/mocks"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/statesync/mocks"
-	"github.com/tendermint/tendermint/types"
-	"github.com/tendermint/tendermint/version"
+
+	"github.com/Finschia/ostracon/config"
+	"github.com/Finschia/ostracon/libs/log"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
+	"github.com/Finschia/ostracon/light"
+	"github.com/Finschia/ostracon/p2p"
+	p2pmocks "github.com/Finschia/ostracon/p2p/mocks"
+	"github.com/Finschia/ostracon/proxy"
+	proxymocks "github.com/Finschia/ostracon/proxy/mocks"
+	sm "github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/statesync/mocks"
+	"github.com/Finschia/ostracon/types"
+	"github.com/Finschia/ostracon/version"
 )
+
+const testAppVersion = 9
 
 // Sets up a basic syncer that can be used to test OfferSnapshot requests
 func setupOfferSyncer(t *testing.T) (*syncer, *proxymocks.AppConnSnapshot) {
@@ -31,7 +37,9 @@ func setupOfferSyncer(t *testing.T) (*syncer, *proxymocks.AppConnSnapshot) {
 	connSnapshot := &proxymocks.AppConnSnapshot{}
 	stateProvider := &mocks.StateProvider{}
 	stateProvider.On("AppHash", mock.Anything, mock.Anything).Return([]byte("app_hash"), nil)
-	syncer := newSyncer(log.NewNopLogger(), connSnapshot, connQuery, stateProvider, "")
+	cfg := config.DefaultStateSyncConfig()
+	syncer := newSyncer(*cfg, log.NewNopLogger(), connSnapshot, connQuery, stateProvider, "")
+
 	return syncer, connSnapshot
 }
 
@@ -48,10 +56,10 @@ func TestSyncer_SyncAny(t *testing.T) {
 		Version: tmstate.Version{
 			Consensus: tmversion.Consensus{
 				Block: version.BlockProtocol,
-				App:   0,
+				App:   testAppVersion,
 			},
 
-			Software: version.TMCoreSemVer,
+			Software: version.OCCoreSemVer,
 		},
 
 		LastBlockHeight: 1,
@@ -60,9 +68,9 @@ func TestSyncer_SyncAny(t *testing.T) {
 		LastResultsHash: []byte("last_results_hash"),
 		AppHash:         []byte("app_hash"),
 
-		LastValidators: &types.ValidatorSet{Proposer: &types.Validator{Address: []byte("val1")}},
-		Validators:     &types.ValidatorSet{Proposer: &types.Validator{Address: []byte("val2")}},
-		NextValidators: &types.ValidatorSet{Proposer: &types.Validator{Address: []byte("val3")}},
+		LastValidators: &types.ValidatorSet{},
+		Validators:     &types.ValidatorSet{},
+		NextValidators: &types.ValidatorSet{},
 
 		ConsensusParams:                  *types.DefaultConsensusParams(),
 		LastHeightConsensusParamsChanged: 1,
@@ -84,7 +92,8 @@ func TestSyncer_SyncAny(t *testing.T) {
 	connSnapshot := &proxymocks.AppConnSnapshot{}
 	connQuery := &proxymocks.AppConnQuery{}
 
-	syncer := newSyncer(log.NewNopLogger(), connSnapshot, connQuery, stateProvider, "")
+	cfg := config.DefaultStateSyncConfig()
+	syncer := newSyncer(*cfg, log.NewNopLogger(), connSnapshot, connQuery, stateProvider, "")
 
 	// Adding a chunk should error when no sync is in progress
 	_, err := syncer.AddChunk(&chunk{Height: 1, Format: 1, Index: 0, Chunk: []byte{1}})
@@ -181,12 +190,12 @@ func TestSyncer_SyncAny(t *testing.T) {
 		Index: 2, Chunk: []byte{1, 1, 2},
 	}).Once().Return(&abci.ResponseApplySnapshotChunk{Result: abci.ResponseApplySnapshotChunk_ACCEPT}, nil)
 	connQuery.On("InfoSync", proxy.RequestInfo).Return(&abci.ResponseInfo{
-		AppVersion:       9,
+		AppVersion:       testAppVersion,
 		LastBlockHeight:  1,
 		LastBlockAppHash: []byte("app_hash"),
 	}, nil)
 
-	newState, lastCommit, err := syncer.SyncAny(0)
+	newState, previousState, lastCommit, err := syncer.SyncAny(0, func() {})
 	require.NoError(t, err)
 
 	time.Sleep(50 * time.Millisecond) // wait for peers to receive requests
@@ -195,11 +204,11 @@ func TestSyncer_SyncAny(t *testing.T) {
 	assert.Equal(t, map[uint32]int{0: 1, 1: 2, 2: 1}, chunkRequests)
 	chunkRequestsMtx.Unlock()
 
-	// The syncer should have updated the state app version from the ABCI info response.
 	expectState := state
-	expectState.Version.Consensus.App = 9
+	expectPreviousState := sm.State{}
 
 	assert.Equal(t, expectState, newState)
+	assert.Equal(t, expectPreviousState, previousState)
 	assert.Equal(t, commit, lastCommit)
 
 	connSnapshot.AssertExpectations(t)
@@ -210,7 +219,7 @@ func TestSyncer_SyncAny(t *testing.T) {
 
 func TestSyncer_SyncAny_noSnapshots(t *testing.T) {
 	syncer, _ := setupOfferSyncer(t)
-	_, _, err := syncer.SyncAny(0)
+	_, _, _, err := syncer.SyncAny(0, func() {})
 	assert.Equal(t, errNoSnapshots, err)
 }
 
@@ -224,7 +233,7 @@ func TestSyncer_SyncAny_abort(t *testing.T) {
 		Snapshot: toABCI(s), AppHash: []byte("app_hash"),
 	}).Once().Return(&abci.ResponseOfferSnapshot{Result: abci.ResponseOfferSnapshot_ABORT}, nil)
 
-	_, _, err = syncer.SyncAny(0)
+	_, _, _, err = syncer.SyncAny(0, func() {})
 	assert.Equal(t, errAbort, err)
 	connSnapshot.AssertExpectations(t)
 }
@@ -255,7 +264,7 @@ func TestSyncer_SyncAny_reject(t *testing.T) {
 		Snapshot: toABCI(s11), AppHash: []byte("app_hash"),
 	}).Once().Return(&abci.ResponseOfferSnapshot{Result: abci.ResponseOfferSnapshot_REJECT}, nil)
 
-	_, _, err = syncer.SyncAny(0)
+	_, _, _, err = syncer.SyncAny(0, func() {})
 	assert.Equal(t, errNoSnapshots, err)
 	connSnapshot.AssertExpectations(t)
 }
@@ -282,7 +291,7 @@ func TestSyncer_SyncAny_reject_format(t *testing.T) {
 		Snapshot: toABCI(s11), AppHash: []byte("app_hash"),
 	}).Once().Return(&abci.ResponseOfferSnapshot{Result: abci.ResponseOfferSnapshot_ABORT}, nil)
 
-	_, _, err = syncer.SyncAny(0)
+	_, _, _, err = syncer.SyncAny(0, func() {})
 	assert.Equal(t, errAbort, err)
 	connSnapshot.AssertExpectations(t)
 }
@@ -320,7 +329,7 @@ func TestSyncer_SyncAny_reject_sender(t *testing.T) {
 		Snapshot: toABCI(sa), AppHash: []byte("app_hash"),
 	}).Once().Return(&abci.ResponseOfferSnapshot{Result: abci.ResponseOfferSnapshot_REJECT}, nil)
 
-	_, _, err = syncer.SyncAny(0)
+	_, _, _, err = syncer.SyncAny(0, func() {})
 	assert.Equal(t, errNoSnapshots, err)
 	connSnapshot.AssertExpectations(t)
 }
@@ -336,7 +345,7 @@ func TestSyncer_SyncAny_abciError(t *testing.T) {
 		Snapshot: toABCI(s), AppHash: []byte("app_hash"),
 	}).Once().Return(nil, errBoom)
 
-	_, _, err = syncer.SyncAny(0)
+	_, _, _, err = syncer.SyncAny(0, func() {})
 	assert.True(t, errors.Is(err, errBoom))
 	connSnapshot.AssertExpectations(t)
 }
@@ -407,7 +416,9 @@ func TestSyncer_applyChunks_Results(t *testing.T) {
 			connSnapshot := &proxymocks.AppConnSnapshot{}
 			stateProvider := &mocks.StateProvider{}
 			stateProvider.On("AppHash", mock.Anything, mock.Anything).Return([]byte("app_hash"), nil)
-			syncer := newSyncer(log.NewNopLogger(), connSnapshot, connQuery, stateProvider, "")
+
+			cfg := config.DefaultStateSyncConfig()
+			syncer := newSyncer(*cfg, log.NewNopLogger(), connSnapshot, connQuery, stateProvider, "")
 
 			body := []byte{1, 2, 3}
 			chunks, err := newChunkQueue(&snapshot{Height: 1, Format: 1, Chunks: 1}, "")
@@ -458,7 +469,9 @@ func TestSyncer_applyChunks_RefetchChunks(t *testing.T) {
 			connSnapshot := &proxymocks.AppConnSnapshot{}
 			stateProvider := &mocks.StateProvider{}
 			stateProvider.On("AppHash", mock.Anything, mock.Anything).Return([]byte("app_hash"), nil)
-			syncer := newSyncer(log.NewNopLogger(), connSnapshot, connQuery, stateProvider, "")
+
+			cfg := config.DefaultStateSyncConfig()
+			syncer := newSyncer(*cfg, log.NewNopLogger(), connSnapshot, connQuery, stateProvider, "")
 
 			chunks, err := newChunkQueue(&snapshot{Height: 1, Format: 1, Chunks: 3}, "")
 			require.NoError(t, err)
@@ -521,7 +534,9 @@ func TestSyncer_applyChunks_RejectSenders(t *testing.T) {
 			connSnapshot := &proxymocks.AppConnSnapshot{}
 			stateProvider := &mocks.StateProvider{}
 			stateProvider.On("AppHash", mock.Anything, mock.Anything).Return([]byte("app_hash"), nil)
-			syncer := newSyncer(log.NewNopLogger(), connSnapshot, connQuery, stateProvider, "")
+
+			cfg := config.DefaultStateSyncConfig()
+			syncer := newSyncer(*cfg, log.NewNopLogger(), connSnapshot, connQuery, stateProvider, "")
 
 			// Set up three peers across two snapshots, and ask for one of them to be banned.
 			// It should be banned from all snapshots.
@@ -604,6 +619,9 @@ func TestSyncer_applyChunks_RejectSenders(t *testing.T) {
 
 func TestSyncer_verifyApp(t *testing.T) {
 	boom := errors.New("boom")
+	const appVersion = 9
+	const invalidAppVersion = appVersion + 1
+	appVersionMismatchErr := fmt.Errorf("app version mismatch. Expected: %d, got: %d", appVersion, invalidAppVersion)
 	s := &snapshot{Height: 3, Format: 1, Chunks: 5, Hash: []byte{1, 2, 3}, trustedAppHash: []byte("app_hash")}
 
 	testcases := map[string]struct {
@@ -614,17 +632,22 @@ func TestSyncer_verifyApp(t *testing.T) {
 		"verified": {&abci.ResponseInfo{
 			LastBlockHeight:  3,
 			LastBlockAppHash: []byte("app_hash"),
-			AppVersion:       9,
+			AppVersion:       appVersion,
 		}, nil, nil},
+		"invalid app version": {&abci.ResponseInfo{
+			LastBlockHeight:  3,
+			LastBlockAppHash: []byte("app_hash"),
+			AppVersion:       invalidAppVersion,
+		}, nil, appVersionMismatchErr},
 		"invalid height": {&abci.ResponseInfo{
 			LastBlockHeight:  5,
 			LastBlockAppHash: []byte("app_hash"),
-			AppVersion:       9,
+			AppVersion:       appVersion,
 		}, nil, errVerifyFailed},
 		"invalid hash": {&abci.ResponseInfo{
 			LastBlockHeight:  3,
 			LastBlockAppHash: []byte("xxx"),
-			AppVersion:       9,
+			AppVersion:       appVersion,
 		}, nil, errVerifyFailed},
 		"error": {nil, boom, boom},
 	}
@@ -634,19 +657,125 @@ func TestSyncer_verifyApp(t *testing.T) {
 			connQuery := &proxymocks.AppConnQuery{}
 			connSnapshot := &proxymocks.AppConnSnapshot{}
 			stateProvider := &mocks.StateProvider{}
-			syncer := newSyncer(log.NewNopLogger(), connSnapshot, connQuery, stateProvider, "")
+
+			cfg := config.DefaultStateSyncConfig()
+			syncer := newSyncer(*cfg, log.NewNopLogger(), connSnapshot, connQuery, stateProvider, "")
 
 			connQuery.On("InfoSync", proxy.RequestInfo).Return(tc.response, tc.err)
-			version, err := syncer.verifyApp(s)
+			err := syncer.verifyApp(s, appVersion)
 			unwrapped := errors.Unwrap(err)
 			if unwrapped != nil {
 				err = unwrapped
 			}
-			assert.Equal(t, tc.expectErr, err)
-			if err == nil {
-				assert.Equal(t, tc.response.AppVersion, version)
-			}
+			require.Equal(t, tc.expectErr, err)
 		})
+	}
+}
+
+func TestSyncer_Sync(t *testing.T) {
+	connQuery := &proxymocks.AppConnQuery{}
+	connSnapshot := &proxymocks.AppConnSnapshot{}
+	stateProvider := &mocks.StateProvider{}
+
+	cfg := config.DefaultStateSyncConfig()
+	syncer := newSyncer(*cfg, log.NewNopLogger(), connSnapshot, connQuery, stateProvider, "")
+	snapshot := &snapshot{}
+	chunkQueue := &chunkQueue{}
+
+	{
+		stateProvider.On("AppHash", mock.Anything, mock.Anything).Once().Return(nil, light.ErrNoWitnesses)
+
+		state, previousState, commit, err := syncer.Sync(snapshot, chunkQueue)
+		require.Error(t, err)
+		require.Equal(t, light.ErrNoWitnesses, err)
+		require.NotNil(t, state)
+		require.NotNil(t, previousState)
+		require.Nil(t, commit)
+	}
+	{
+		stateProvider.On("AppHash", mock.Anything, mock.Anything).Once().Return(nil, errRejectSnapshot)
+
+		state, previousState, commit, err := syncer.Sync(snapshot, chunkQueue)
+		require.Error(t, err)
+		require.Equal(t, errRejectSnapshot, err)
+		require.NotNil(t, state)
+		require.NotNil(t, previousState)
+		require.Nil(t, commit)
+	}
+
+	stateProvider.On("AppHash", mock.Anything, mock.Anything).Return([]byte("app_hash"), nil)
+	connSnapshot.On("OfferSnapshotSync", mock.Anything).Return(
+		&abci.ResponseOfferSnapshot{Result: abci.ResponseOfferSnapshot_ACCEPT}, nil)
+	snapshot.Height = 2
+
+	{
+		stateProvider.On("State", mock.Anything, snapshot.Height).Once().Return(sm.State{}, light.ErrNoWitnesses)
+
+		state, previousState, commit, err := syncer.Sync(snapshot, chunkQueue)
+		require.Error(t, err)
+		require.Equal(t, light.ErrNoWitnesses, err)
+		require.NotNil(t, state)
+		require.NotNil(t, previousState)
+		require.Nil(t, commit)
+	}
+
+	{
+		stateProvider.On("State", mock.Anything, snapshot.Height).Once().Return(sm.State{}, errRejectSnapshot)
+
+		state, previousState, commit, err := syncer.Sync(snapshot, chunkQueue)
+		require.Error(t, err)
+		require.Equal(t, errRejectSnapshot, err)
+		require.NotNil(t, state)
+		require.NotNil(t, previousState)
+		require.Nil(t, commit)
+	}
+
+	stateProvider.On("State", mock.Anything, snapshot.Height).Return(sm.State{}, nil)
+
+	{
+		stateProvider.On("State", mock.Anything, snapshot.Height-1).Once().Return(sm.State{}, light.ErrNoWitnesses)
+
+		state, previousState, commit, err := syncer.Sync(snapshot, chunkQueue)
+		require.Error(t, err)
+		require.Equal(t, light.ErrNoWitnesses, err)
+		require.NotNil(t, state)
+		require.NotNil(t, previousState)
+		require.Nil(t, commit)
+	}
+
+	{
+		stateProvider.On("State", mock.Anything, snapshot.Height-1).Once().Return(sm.State{}, errRejectSnapshot)
+
+		state, previousState, commit, err := syncer.Sync(snapshot, chunkQueue)
+		require.Error(t, err)
+		require.Equal(t, errRejectSnapshot, err)
+		require.NotNil(t, state)
+		require.NotNil(t, previousState)
+		require.Nil(t, commit)
+	}
+
+	stateProvider.On("State", mock.Anything, snapshot.Height-1).Return(sm.State{}, nil)
+
+	{
+		stateProvider.On("Commit", mock.Anything, snapshot.Height).Once().Return(nil, light.ErrNoWitnesses)
+
+		state, previousState, commit, err := syncer.Sync(snapshot, chunkQueue)
+		require.Error(t, err)
+		require.Equal(t, light.ErrNoWitnesses, err)
+		require.NotNil(t, state)
+		require.NotNil(t, previousState)
+		require.Nil(t, commit)
+	}
+
+	{
+		stateProvider.On("Commit", mock.Anything, snapshot.Height).Once().Return(nil, errRejectSnapshot)
+
+		state, previousState, commit, err := syncer.Sync(snapshot, chunkQueue)
+		require.Error(t, err)
+		require.Equal(t, errRejectSnapshot, err)
+		require.NotNil(t, state)
+		require.NotNil(t, previousState)
+		require.Nil(t, commit)
 	}
 }
 

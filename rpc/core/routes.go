@@ -1,7 +1,7 @@
 package core
 
 import (
-	rpc "github.com/tendermint/tendermint/rpc/jsonrpc/server"
+	rpc "github.com/Finschia/ostracon/rpc/jsonrpc/server"
 )
 
 // TODO: better system than "unsafe" prefix
@@ -19,6 +19,7 @@ var Routes = map[string]*rpc.RPCFunc{
 	"net_info":             rpc.NewRPCFunc(NetInfo, ""),
 	"blockchain":           rpc.NewRPCFunc(BlockchainInfo, "minHeight,maxHeight"),
 	"genesis":              rpc.NewRPCFunc(Genesis, ""),
+	"genesis_chunked":      rpc.NewRPCFunc(GenesisChunked, "chunk"),
 	"block":                rpc.NewRPCFunc(Block, "height"),
 	"block_by_hash":        rpc.NewRPCFunc(BlockByHash, "hash"),
 	"block_results":        rpc.NewRPCFunc(BlockResults, "height"),
@@ -26,6 +27,7 @@ var Routes = map[string]*rpc.RPCFunc{
 	"check_tx":             rpc.NewRPCFunc(CheckTx, "tx"),
 	"tx":                   rpc.NewRPCFunc(Tx, "hash,prove"),
 	"tx_search":            rpc.NewRPCFunc(TxSearch, "query,prove,page,per_page,order_by"),
+	"block_search":         rpc.NewRPCFunc(BlockSearch, "query,page,per_page,order_by"),
 	"validators":           rpc.NewRPCFunc(Validators, "height,page,per_page"),
 	"dump_consensus_state": rpc.NewRPCFunc(DumpConsensusState, ""),
 	"consensus_state":      rpc.NewRPCFunc(ConsensusState, ""),

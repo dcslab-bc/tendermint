@@ -9,13 +9,13 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/tendermint/tendermint/libs/log"
+	"github.com/Finschia/ostracon/libs/log"
 )
 
 func TestTracingLogger(t *testing.T) {
 	var buf bytes.Buffer
 
-	logger := log.NewTMJSONLoggerNoTS(&buf)
+	logger := log.NewOCJSONLoggerNoTS(&buf)
 
 	logger1 := log.NewTracingLogger(logger)
 	err1 := errors.New("courage is grace under pressure")

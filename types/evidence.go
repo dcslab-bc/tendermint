@@ -10,12 +10,29 @@ import (
 	"time"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/crypto/merkle"
-	"github.com/tendermint/tendermint/crypto/tmhash"
-	tmjson "github.com/tendermint/tendermint/libs/json"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
+
+	"github.com/Finschia/ostracon/crypto/merkle"
+	"github.com/Finschia/ostracon/crypto/tmhash"
+	tmjson "github.com/Finschia/ostracon/libs/json"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
 )
+
+func MaxEvidenceBytes(ev Evidence) int64 {
+	switch ev := ev.(type) {
+	case *DuplicateVoteEvidence:
+		return (1 + MaxVoteBytes + 2) + // VoteA
+			(1 + MaxVoteBytes + 2) + // VoteB
+			(1 + 9) + // TotalVotingPower
+			(1 + 9) + // ValidatorPower
+			(1 + 17 + 1) // Timestamp
+	case *LightClientAttackEvidence:
+		// FIXME 🏺 need this?
+		return 0
+	default:
+		panic(fmt.Sprintf("unsupported evidence: %+v", ev))
+	}
+}
 
 // Evidence represents any provable malicious activity by a validator.
 // Verification logic for each evidence is part of the evidence module.
@@ -205,7 +222,7 @@ func (l *LightClientAttackEvidence) ABCI() []abci.Evidence {
 	for idx, val := range l.ByzantineValidators {
 		abciEv[idx] = abci.Evidence{
 			Type:             abci.EvidenceType_LIGHT_CLIENT_ATTACK,
-			Validator:        TM2PB.Validator(val),
+			Validator:        OC2PB.Validator(val),
 			Height:           l.Height(),
 			Time:             l.Timestamp,
 			TotalVotingPower: l.TotalVotingPower,
@@ -288,14 +305,16 @@ func (l *LightClientAttackEvidence) ConflictingHeaderIsInvalid(trustedHeader *He
 		!bytes.Equal(trustedHeader.ConsensusHash, l.ConflictingBlock.ConsensusHash) ||
 		!bytes.Equal(trustedHeader.AppHash, l.ConflictingBlock.AppHash) ||
 		!bytes.Equal(trustedHeader.LastResultsHash, l.ConflictingBlock.LastResultsHash)
-
 }
 
 // Hash returns the hash of the header and the commonHeight. This is designed to cause hash collisions
 // with evidence that have the same conflicting header and common height but different permutations
 // of validator commit signatures. The reason for this is that we don't want to allow several
 // permutations of the same evidence to be committed on chain. Ideally we commit the header with the
-// most commit signatures (captures the most byzantine validators) but anything greater than 1/3 is sufficient.
+// most commit signatures (captures the most byzantine validators) but anything greater than 1/3 is
+// sufficient.
+// TODO: We should change the hash to include the commit, header, total voting power, byzantine
+// validators and timestamp
 func (l *LightClientAttackEvidence) Hash() []byte {
 	buf := make([]byte, binary.MaxVarintLen64)
 	n := binary.PutVarint(buf, l.CommonHeight)
@@ -314,8 +333,14 @@ func (l *LightClientAttackEvidence) Height() int64 {
 
 // String returns a string representation of LightClientAttackEvidence
 func (l *LightClientAttackEvidence) String() string {
-	return fmt.Sprintf("LightClientAttackEvidence{ConflictingBlock: %v, CommonHeight: %d}",
-		l.ConflictingBlock.String(), l.CommonHeight)
+	return fmt.Sprintf(`LightClientAttackEvidence{
+		ConflictingBlock: %v,
+		CommonHeight: %d,
+		ByzatineValidators: %v,
+		TotalVotingPower: %d,
+		Timestamp: %v}#%X`,
+		l.ConflictingBlock.String(), l.CommonHeight, l.ByzantineValidators,
+		l.TotalVotingPower, l.Timestamp, l.Hash())
 }
 
 // Time returns the time of the common block where the infraction leveraged off.
@@ -334,8 +359,8 @@ func (l *LightClientAttackEvidence) ValidateBasic() error {
 		return errors.New("conflicting block missing header")
 	}
 
-	if err := l.ConflictingBlock.ValidateBasic(l.ConflictingBlock.ChainID); err != nil {
-		return fmt.Errorf("invalid conflicting light block: %w", err)
+	if l.TotalVotingPower <= 0 {
+		return errors.New("negative or zero total voting power")
 	}
 
 	if l.CommonHeight <= 0 {
@@ -348,6 +373,10 @@ func (l *LightClientAttackEvidence) ValidateBasic() error {
 	if l.CommonHeight > l.ConflictingBlock.Height {
 		return fmt.Errorf("common height is ahead of the conflicting block height (%d > %d)",
 			l.CommonHeight, l.ConflictingBlock.Height)
+	}
+
+	if err := l.ConflictingBlock.ValidateBasic(l.ConflictingBlock.ChainID); err != nil {
+		return fmt.Errorf("invalid conflicting light block: %w", err)
 	}
 
 	return nil
@@ -421,6 +450,8 @@ func (evl EvidenceList) Hash() []byte {
 	// the Evidence size is capped.
 	evidenceBzs := make([][]byte, len(evl))
 	for i := 0; i < len(evl); i++ {
+		// TODO: We should change this to the hash. Using bytes contains some unexported data that
+		// may cause different hashes
 		evidenceBzs[i] = evl[i].Bytes()
 	}
 	return merkle.HashFromByteSlices(evidenceBzs)
@@ -496,8 +527,8 @@ func EvidenceFromProto(evidence *tmproto.Evidence) (Evidence, error) {
 }
 
 func init() {
-	tmjson.RegisterType(&DuplicateVoteEvidence{}, "tendermint/DuplicateVoteEvidence")
-	tmjson.RegisterType(&LightClientAttackEvidence{}, "tendermint/LightClientAttackEvidence")
+	tmjson.RegisterType(&DuplicateVoteEvidence{}, "ostracon/DuplicateVoteEvidence")
+	tmjson.RegisterType(&LightClientAttackEvidence{}, "ostracon/LightClientAttackEvidence")
 }
 
 //-------------------------------------------- ERRORS --------------------------------------

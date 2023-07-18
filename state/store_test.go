@@ -1,6 +1,7 @@
 package state_test
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -8,17 +9,27 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	dbm "github.com/tendermint/tm-db"
-
 	abci "github.com/tendermint/tendermint/abci/types"
-	cfg "github.com/tendermint/tendermint/config"
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
 	tmstate "github.com/tendermint/tendermint/proto/tendermint/state"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/types"
+	dbm "github.com/tendermint/tm-db"
+
+	cfg "github.com/Finschia/ostracon/config"
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/crypto/ed25519"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
+	ocstate "github.com/Finschia/ostracon/proto/ostracon/state"
+	sm "github.com/Finschia/ostracon/state"
+	statemocks "github.com/Finschia/ostracon/state/mocks"
+	"github.com/Finschia/ostracon/types"
+)
+
+const (
+	// persist validators every valSetCheckpointInterval blocks to avoid
+	// LoadValidators taking too much time.
+	// https://github.com/tendermint/tendermint/pull/3438
+	// 100000 results in ~ 100ms to get 100 validators (see BenchmarkLoadValidators)
+	valSetCheckpointInterval = 100000
 )
 
 func TestStoreLoadValidators(t *testing.T) {
@@ -28,9 +39,9 @@ func TestStoreLoadValidators(t *testing.T) {
 	vals := types.NewValidatorSet([]*types.Validator{val})
 
 	// 1) LoadValidators loads validators using a height where they were last changed
-	err := sm.SaveValidatorsInfo(stateDB, 1, 1, vals)
+	err := sm.SaveValidatorsInfo(stateDB, 1, 1, []byte{}, vals)
 	require.NoError(t, err)
-	err = sm.SaveValidatorsInfo(stateDB, 2, 1, vals)
+	err = sm.SaveValidatorsInfo(stateDB, 2, 1, []byte{}, vals)
 	require.NoError(t, err)
 	loadedVals, err := stateStore.LoadValidators(2)
 	require.NoError(t, err)
@@ -38,7 +49,7 @@ func TestStoreLoadValidators(t *testing.T) {
 
 	// 2) LoadValidators loads validators using a checkpoint height
 
-	err = sm.SaveValidatorsInfo(stateDB, sm.ValSetCheckpointInterval, 1, vals)
+	err = sm.SaveValidatorsInfo(stateDB, sm.ValSetCheckpointInterval, 1, []byte{}, vals)
 	require.NoError(t, err)
 
 	loadedVals, err = stateStore.LoadValidators(sm.ValSetCheckpointInterval)
@@ -61,14 +72,16 @@ func BenchmarkLoadValidators(b *testing.B) {
 	}
 
 	state.Validators = genValSet(valSetSize)
-	state.NextValidators = state.Validators.CopyIncrementProposerPriority(1)
+	state.Validators.SelectProposer([]byte{}, 1, 0)
+	state.NextValidators = state.Validators.Copy()
+	state.NextValidators.SelectProposer([]byte{}, 2, 0)
 	err = stateStore.Save(state)
 	require.NoError(b, err)
 
 	for i := 10; i < 10000000000; i *= 10 { // 10, 100, 1000, ...
 		i := i
 		if err := sm.SaveValidatorsInfo(stateDB,
-			int64(i), state.LastHeightValidatorsChanged, state.NextValidators); err != nil {
+			int64(i), state.LastHeightValidatorsChanged, []byte{}, state.NextValidators); err != nil {
 			b.Fatal(err)
 		}
 
@@ -81,6 +94,55 @@ func BenchmarkLoadValidators(b *testing.B) {
 			}
 		})
 	}
+}
+
+func createState(height, valsChanged, paramsChanged int64, validatorSet *types.ValidatorSet) sm.State {
+	if height < 1 {
+		panic(height)
+	}
+	state := sm.State{
+		InitialHeight:   1,
+		LastBlockHeight: height - 1,
+		Validators:      validatorSet,
+		NextValidators:  validatorSet,
+		ConsensusParams: tmproto.ConsensusParams{
+			Block: tmproto.BlockParams{MaxBytes: 10e6},
+		},
+		LastHeightValidatorsChanged:      valsChanged,
+		LastHeightConsensusParamsChanged: paramsChanged,
+		LastProofHash:                    []byte{0},
+	}
+	if state.LastBlockHeight >= 1 {
+		state.LastValidators = state.Validators
+	}
+	return state
+}
+
+func createStates(makeHeights int64) []sm.State {
+	states := []sm.State{}
+	pk := ed25519.GenPrivKey().PubKey()
+
+	// Generate a bunch of state data. Validators change for heights ending with 3, and
+	// parameters when ending with 5.
+	validator := &types.Validator{Address: tmrand.Bytes(crypto.AddressSize), VotingPower: 100, PubKey: pk}
+	validatorSet := &types.ValidatorSet{
+		Validators: []*types.Validator{validator},
+	}
+	valsChanged := int64(0)
+	paramsChanged := int64(0)
+
+	for h := int64(1); h <= makeHeights; h++ {
+		if valsChanged == 0 || h%10 == 2 {
+			valsChanged = h + 1 // Have to add 1, since NextValidators is what's stored
+		}
+		if paramsChanged == 0 || h%10 == 5 {
+			paramsChanged = h
+		}
+
+		state := createState(h, valsChanged, paramsChanged, validatorSet)
+		states = append(states, state)
+	}
+	return states
 }
 
 func TestPruneStates(t *testing.T) {
@@ -108,46 +170,15 @@ func TestPruneStates(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			db := dbm.NewMemDB()
 			stateStore := sm.NewStore(db)
-			pk := ed25519.GenPrivKey().PubKey()
 
-			// Generate a bunch of state data. Validators change for heights ending with 3, and
-			// parameters when ending with 5.
-			validator := &types.Validator{Address: tmrand.Bytes(crypto.AddressSize), VotingPower: 100, PubKey: pk}
-			validatorSet := &types.ValidatorSet{
-				Validators: []*types.Validator{validator},
-				Proposer:   validator,
-			}
-			valsChanged := int64(0)
-			paramsChanged := int64(0)
+			states := createStates(tc.makeHeights)
 
-			for h := int64(1); h <= tc.makeHeights; h++ {
-				if valsChanged == 0 || h%10 == 2 {
-					valsChanged = h + 1 // Have to add 1, since NextValidators is what's stored
-				}
-				if paramsChanged == 0 || h%10 == 5 {
-					paramsChanged = h
-				}
-
-				state := sm.State{
-					InitialHeight:   1,
-					LastBlockHeight: h - 1,
-					Validators:      validatorSet,
-					NextValidators:  validatorSet,
-					ConsensusParams: tmproto.ConsensusParams{
-						Block: tmproto.BlockParams{MaxBytes: 10e6},
-					},
-					LastHeightValidatorsChanged:      valsChanged,
-					LastHeightConsensusParamsChanged: paramsChanged,
-				}
-
-				if state.LastBlockHeight >= 1 {
-					state.LastValidators = state.Validators
-				}
-
+			for _, state := range states {
 				err := stateStore.Save(state)
 				require.NoError(t, err)
 
-				err = stateStore.SaveABCIResponses(h, &tmstate.ABCIResponses{
+				currentHeight := state.LastBlockHeight + int64(1)
+				err = stateStore.SaveABCIResponses(currentHeight, &ocstate.ABCIResponses{
 					DeliverTxs: []*abci.ResponseDeliverTx{
 						{Data: []byte{1}},
 						{Data: []byte{2}},
@@ -200,8 +231,64 @@ func TestPruneStates(t *testing.T) {
 	}
 }
 
+func TestPruneStatesDeleteErrHandle(t *testing.T) {
+	testcases := map[string]struct {
+		deleteValidatorsRet      error
+		deleteConsensusParamsRet error
+		deleteProofHashRet       error
+	}{
+		"error on deleting validators":       {errors.New("error"), nil, nil},
+		"error on deleting consensus params": {nil, errors.New("error"), nil},
+		"error on deleting proof hash":       {nil, nil, errors.New("error")},
+		"error on deleting all":              {errors.New("error"), errors.New("error"), errors.New("error")},
+	}
+	for name, tc := range testcases {
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			batchMock := &statemocks.Batch{}
+			batchMock.On("Close").Return(nil)
+			dbMock := &statemocks.DB{}
+			dbMock.On("NewBatch").Return(batchMock)
+
+			states := createStates(10)
+
+			for _, state := range states {
+				// Prepare a mock for prune states
+				nextHeight := state.LastBlockHeight + 1
+				if nextHeight == 1 {
+					nextHeight = state.InitialHeight
+					bufValidators, err := validatorsInfoToByte(nextHeight, nextHeight, state.Validators)
+					require.NoError(t, err)
+					batchMock.On("Delete", []byte(fmt.Sprintf("validatorsKey:%v", nextHeight))).Return(nil)
+					dbMock.On("Get", []byte(fmt.Sprintf("validatorsKey:%v", nextHeight))).Return(bufValidators, nil)
+				}
+				// create validators mock method
+				bufValidators, err := validatorsInfoToByte(nextHeight+1, state.LastHeightValidatorsChanged, state.NextValidators)
+				require.NoError(t, err)
+				batchMock.On("Delete", []byte(fmt.Sprintf("validatorsKey:%v", nextHeight+1))).Return(tc.deleteValidatorsRet)
+				dbMock.On("Get", []byte(fmt.Sprintf("validatorsKey:%v", nextHeight+1))).Return(bufValidators, nil)
+
+				// create consensus params mock method
+				bufConsensusParams, err := consensusParamsInfoToByte(nextHeight,
+					state.LastHeightConsensusParamsChanged, state.ConsensusParams)
+				require.NoError(t, err)
+				batchMock.On("Delete", []byte(fmt.Sprintf("consensusParamsKey:%v", nextHeight))).Return(tc.deleteConsensusParamsRet)
+				dbMock.On("Get", []byte(fmt.Sprintf("consensusParamsKey:%v", nextHeight))).Return(bufConsensusParams, nil)
+
+				// create proof hash mock method
+				batchMock.On("Delete", []byte(fmt.Sprintf("proofHashKey:%v", nextHeight))).Return(tc.deleteProofHashRet)
+				dbMock.On("Get", []byte(fmt.Sprintf("proofHashKey:%v", nextHeight))).Return(state.LastProofHash, nil)
+			}
+
+			stateStoreInMock := sm.NewStore(dbMock)
+			err := stateStoreInMock.PruneStates(1, 10)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestABCIResponsesResultsHash(t *testing.T) {
-	responses := &tmstate.ABCIResponses{
+	responses := &ocstate.ABCIResponses{
 		BeginBlock: &abci.ResponseBeginBlock{},
 		DeliverTxs: []*abci.ResponseDeliverTx{
 			{Code: 32, Data: []byte("Hello"), Log: "Huh?"},
@@ -228,4 +315,40 @@ func sliceToMap(s []int64) map[int64]bool {
 		m[i] = true
 	}
 	return m
+}
+
+func validatorsInfoToByte(height, lastHeightChanged int64, valSet *types.ValidatorSet) ([]byte, error) {
+	valInfo := &tmstate.ValidatorsInfo{
+		LastHeightChanged: lastHeightChanged,
+	}
+	if height == lastHeightChanged || height%valSetCheckpointInterval == 0 {
+		pv, err := valSet.ToProto()
+		if err != nil {
+			return nil, err
+		}
+		valInfo.ValidatorSet = pv
+	}
+
+	bz, err := valInfo.Marshal()
+	if err != nil {
+		return nil, err
+	}
+
+	return bz, nil
+}
+
+func consensusParamsInfoToByte(nextHeight, changeHeight int64, params tmproto.ConsensusParams) ([]byte, error) {
+	paramsInfo := &tmstate.ConsensusParamsInfo{
+		LastHeightChanged: changeHeight,
+	}
+
+	if changeHeight == nextHeight {
+		paramsInfo.ConsensusParams = params
+	}
+	bz, err := paramsInfo.Marshal()
+	if err != nil {
+		return nil, err
+	}
+
+	return bz, nil
 }

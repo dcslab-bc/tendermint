@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tendermint/tendermint/crypto"
-	ce "github.com/tendermint/tendermint/crypto/encoding"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
+
+	"github.com/Finschia/ostracon/crypto"
+	ce "github.com/Finschia/ostracon/crypto/encoding"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
 )
 
 // Volatile state for each Validator
@@ -160,7 +161,7 @@ func ValidatorFromProto(vp *tmproto.Validator) (*Validator, error) {
 		return nil, errors.New("nil validator")
 	}
 
-	pk, err := ce.PubKeyFromProto(vp.PubKey)
+	pk, err := ce.PubKeyFromProto(&vp.PubKey)
 	if err != nil {
 		return nil, err
 	}
@@ -180,14 +181,14 @@ func ValidatorFromProto(vp *tmproto.Validator) (*Validator, error) {
 // UNSTABLE
 func RandValidator(randPower bool, minPower int64) (*Validator, PrivValidator) {
 	privVal := NewMockPV()
-	votePower := minPower
+	votingPower := minPower
 	if randPower {
-		votePower += int64(tmrand.Uint32())
+		votingPower += int64(tmrand.Uint32())
 	}
 	pubKey, err := privVal.GetPubKey()
 	if err != nil {
 		panic(fmt.Errorf("could not retrieve pubkey %w", err))
 	}
-	val := NewValidator(pubKey, votePower)
+	val := NewValidator(pubKey, votingPower)
 	return val, privVal
 }

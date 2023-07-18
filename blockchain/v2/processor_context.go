@@ -3,8 +3,8 @@ package v2
 import (
 	"fmt"
 
-	"github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/types"
 )
 
 type processorContext interface {
@@ -30,7 +30,7 @@ func newProcessorContext(st blockStore, ex blockApplier, s state.State) *pContex
 }
 
 func (pc *pContext) applyBlock(blockID types.BlockID, block *types.Block) error {
-	newState, _, err := pc.applier.ApplyBlock(pc.state, blockID, block)
+	newState, _, err := pc.applier.ApplyBlock(pc.state, blockID, block, nil)
 	pc.state = newState
 	return err
 }

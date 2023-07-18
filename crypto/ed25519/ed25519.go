@@ -3,14 +3,16 @@ package ed25519
 import (
 	"bytes"
 	"crypto/subtle"
+	"encoding/hex"
 	"fmt"
 	"io"
 
 	"golang.org/x/crypto/ed25519"
 
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/crypto/tmhash"
-	tmjson "github.com/tendermint/tendermint/libs/json"
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/crypto/tmhash"
+	"github.com/Finschia/ostracon/crypto/vrf"
+	tmjson "github.com/Finschia/ostracon/libs/json"
 )
 
 //-------------------------------------
@@ -24,7 +26,7 @@ const (
 	PubKeySize = 32
 	// PrivateKeySize is the size, in bytes, of private keys as used in this package.
 	PrivateKeySize = 64
-	// Size of an Edwards25519 signature. Namely the size of a compressed
+	// SignatureSize of an Edwards25519 signature. Namely the size of a compressed
 	// Edwards25519 point, and a field element. Both of which are 32 bytes.
 	SignatureSize = 64
 	// SeedSize is the size, in bytes, of private key seeds. These are the
@@ -57,6 +59,15 @@ func (privKey PrivKey) Bytes() []byte {
 func (privKey PrivKey) Sign(msg []byte) ([]byte, error) {
 	signatureBytes := ed25519.Sign(ed25519.PrivateKey(privKey), msg)
 	return signatureBytes, nil
+}
+
+// VRFProve generates a VRF Proof for given message to generate a verifiable random.
+func (privKey PrivKey) VRFProve(message []byte) (crypto.Proof, error) {
+	proof, err := vrf.Prove(privKey[:], message)
+	if err != nil {
+		return nil, err
+	}
+	return crypto.Proof(proof[:]), nil
 }
 
 // PubKey gets the corresponding public key from the private key.
@@ -98,7 +109,7 @@ func (privKey PrivKey) Type() string {
 
 // GenPrivKey generates a new ed25519 private key.
 // It uses OS randomness in conjunction with the current global random seed
-// in tendermint/libs/common to generate the private key.
+// in ostracon/libs/common to generate the private key.
 func GenPrivKey() PrivKey {
 	return genPrivKey(crypto.CReader())
 }
@@ -160,6 +171,23 @@ func (pubKey PubKey) String() string {
 
 func (pubKey PubKey) Type() string {
 	return KeyType
+}
+
+// VRFVerify verifies that the given VRF Proof was generated from the message by the owner of this public key.
+func (pubKey PubKey) VRFVerify(proof crypto.Proof, message []byte) (crypto.Output, error) {
+	valid, err := vrf.Verify(pubKey[:], vrf.Proof(proof), message)
+	if err != nil {
+		return nil, fmt.Errorf("the specified proof is not a valid ed25519 proof: err: %s", err.Error())
+	}
+	if !valid {
+		return nil, fmt.Errorf("the specified Proof is not generated with this pair-key: %s",
+			hex.EncodeToString(proof))
+	}
+	output, err := vrf.ProofToHash(vrf.Proof(proof))
+	if err != nil {
+		return nil, err
+	}
+	return crypto.Output(output), nil
 }
 
 func (pubKey PubKey) Equals(other crypto.PubKey) bool {

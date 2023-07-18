@@ -6,12 +6,14 @@ import (
 	"time"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
-	"github.com/tendermint/tendermint/p2p"
 	ssproto "github.com/tendermint/tendermint/proto/tendermint/statesync"
-	"github.com/tendermint/tendermint/proxy"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/types"
+
+	"github.com/Finschia/ostracon/config"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
+	"github.com/Finschia/ostracon/p2p"
+	"github.com/Finschia/ostracon/proxy"
+	sm "github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/types"
 )
 
 const (
@@ -28,6 +30,7 @@ const (
 type Reactor struct {
 	p2p.BaseReactor
 
+	cfg       config.StateSyncConfig
 	conn      proxy.AppConnSnapshot
 	connQuery proxy.AppConnQuery
 	tempDir   string
@@ -39,12 +42,21 @@ type Reactor struct {
 }
 
 // NewReactor creates a new state sync reactor.
-func NewReactor(conn proxy.AppConnSnapshot, connQuery proxy.AppConnQuery, tempDir string) *Reactor {
+func NewReactor(
+	cfg config.StateSyncConfig,
+	conn proxy.AppConnSnapshot,
+	connQuery proxy.AppConnQuery,
+	async bool,
+	recvBufSize int,
+) *Reactor {
+
 	r := &Reactor{
+		cfg:       cfg,
 		conn:      conn,
 		connQuery: connQuery,
 	}
-	r.BaseReactor = *p2p.NewBaseReactor("StateSync", r)
+	r.BaseReactor = *p2p.NewBaseReactor("StateSync", r, async, recvBufSize)
+
 	return r
 }
 
@@ -59,8 +71,8 @@ func (r *Reactor) GetChannels() []*p2p.ChannelDescriptor {
 		},
 		{
 			ID:                  ChunkChannel,
-			Priority:            1,
-			SendQueueCapacity:   4,
+			Priority:            3,
+			SendQueueCapacity:   10,
 			RecvMessageCapacity: chunkMsgSize,
 		},
 	}
@@ -68,6 +80,11 @@ func (r *Reactor) GetChannels() []*p2p.ChannelDescriptor {
 
 // OnStart implements p2p.Reactor.
 func (r *Reactor) OnStart() error {
+	// call BaseReactor's OnStart()
+	err := r.BaseReactor.OnStart()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -144,6 +161,7 @@ func (r *Reactor) Receive(chID byte, src p2p.Peer, msgBytes []byte) {
 				Hash:     msg.Hash,
 				Metadata: msg.Metadata,
 			})
+			// TODO: We may want to consider punishing the peer for certain errors
 			if err != nil {
 				r.Logger.Error("Failed to add snapshot", "height", msg.Height, "format", msg.Format,
 					"peer", src.ID(), "err", err)
@@ -244,24 +262,30 @@ func (r *Reactor) recentSnapshots(n uint32) ([]*snapshot, error) {
 	return snapshots, nil
 }
 
-// Sync runs a state sync, returning the new state and last commit at the snapshot height.
+// Sync runs a state sync, returning the new state, previous state and last commit at the snapshot height.
 // The caller must store the state and commit in the state database and block store.
-func (r *Reactor) Sync(stateProvider StateProvider, discoveryTime time.Duration) (sm.State, *types.Commit, error) {
+func (r *Reactor) Sync(
+	stateProvider StateProvider, discoveryTime time.Duration) (sm.State, sm.State, *types.Commit, error) {
 	r.mtx.Lock()
 	if r.syncer != nil {
 		r.mtx.Unlock()
-		return sm.State{}, nil, errors.New("a state sync is already in progress")
+		return sm.State{}, sm.State{}, nil, errors.New("a state sync is already in progress")
 	}
-	r.syncer = newSyncer(r.Logger, r.conn, r.connQuery, stateProvider, r.tempDir)
+	r.syncer = newSyncer(r.cfg, r.Logger, r.conn, r.connQuery, stateProvider, r.tempDir)
 	r.mtx.Unlock()
 
-	// Request snapshots from all currently connected peers
-	r.Logger.Debug("Requesting snapshots from known peers")
-	r.Switch.Broadcast(SnapshotChannel, mustEncodeMsg(&ssproto.SnapshotsRequest{}))
+	hook := func() {
+		r.Logger.Debug("Requesting snapshots from known peers")
+		// Request snapshots from all currently connected peers
+		r.Switch.Broadcast(SnapshotChannel, mustEncodeMsg(&ssproto.SnapshotsRequest{}))
+	}
 
-	state, commit, err := r.syncer.SyncAny(discoveryTime)
+	hook()
+
+	state, previousState, commit, err := r.syncer.SyncAny(discoveryTime, hook)
+
 	r.mtx.Lock()
 	r.syncer = nil
 	r.mtx.Unlock()
-	return state, commit, err
+	return state, previousState, commit, err
 }

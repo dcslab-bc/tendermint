@@ -2,10 +2,11 @@ package core
 
 import (
 	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/libs/bytes"
-	"github.com/tendermint/tendermint/proxy"
-	ctypes "github.com/tendermint/tendermint/rpc/core/types"
-	rpctypes "github.com/tendermint/tendermint/rpc/jsonrpc/types"
+
+	"github.com/Finschia/ostracon/libs/bytes"
+	"github.com/Finschia/ostracon/proxy"
+	ctypes "github.com/Finschia/ostracon/rpc/core/types"
+	rpctypes "github.com/Finschia/ostracon/rpc/jsonrpc/types"
 )
 
 // ABCIQuery queries the application for some information.
@@ -26,7 +27,7 @@ func ABCIQuery(
 	if err != nil {
 		return nil, err
 	}
-	env.Logger.Info("ABCIQuery", "path", path, "data", data, "result", resQuery)
+
 	return &ctypes.ResultABCIQuery{Response: *resQuery}, nil
 }
 
@@ -37,5 +38,6 @@ func ABCIInfo(ctx *rpctypes.Context) (*ctypes.ResultABCIInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return &ctypes.ResultABCIInfo{Response: *resInfo}, nil
 }

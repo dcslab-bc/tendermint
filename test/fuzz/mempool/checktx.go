@@ -1,10 +1,10 @@
 package checktx
 
 import (
-	"github.com/tendermint/tendermint/abci/example/kvstore"
-	"github.com/tendermint/tendermint/config"
-	mempl "github.com/tendermint/tendermint/mempool"
-	"github.com/tendermint/tendermint/proxy"
+	"github.com/Finschia/ostracon/abci/example/kvstore"
+	"github.com/Finschia/ostracon/config"
+	mempl "github.com/Finschia/ostracon/mempool"
+	"github.com/Finschia/ostracon/proxy"
 )
 
 var mempool mempl.Mempool
@@ -25,7 +25,7 @@ func init() {
 }
 
 func Fuzz(data []byte) int {
-	err := mempool.CheckTx(data, nil, mempl.TxInfo{})
+	_, err := mempool.CheckTxSync(data, mempl.TxInfo{})
 	if err != nil {
 		return 0
 	}

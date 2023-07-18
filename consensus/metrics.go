@@ -4,7 +4,7 @@ import (
 	"github.com/go-kit/kit/metrics"
 	"github.com/go-kit/kit/metrics/discard"
 
-	prometheus "github.com/go-kit/kit/metrics/prometheus"
+	"github.com/go-kit/kit/metrics/prometheus"
 	stdprometheus "github.com/prometheus/client_golang/prometheus"
 )
 
@@ -43,7 +43,7 @@ type Metrics struct {
 	ByzantineValidatorsPower metrics.Gauge
 
 	// Time between this and the last block.
-	BlockIntervalSeconds metrics.Histogram
+	BlockIntervalSeconds metrics.Gauge
 
 	// Number of transactions.
 	NumTxs metrics.Gauge
@@ -60,6 +60,49 @@ type Metrics struct {
 
 	// Number of blockparts transmitted by peer.
 	BlockParts metrics.Counter
+
+	// QuroumPrevoteMessageDelay is the interval in seconds between the proposal
+	// timestamp and the timestamp of the earliest prevote that achieved a quorum
+	// during the prevote step.
+	//
+	// To compute it, sum the voting power over each prevote received, in increasing
+	// order of timestamp. The timestamp of the first prevote to increase the sum to
+	// be above 2/3 of the total voting power of the network defines the endpoint
+	// the endpoint of the interval. Subtract the proposal timestamp from this endpoint
+	// to obtain the quorum delay.
+	QuorumPrevoteMessageDelay metrics.Gauge
+
+	// FullPrevoteMessageDelay is the interval in seconds between the proposal
+	// timestamp and the timestamp of the latest prevote in a round where 100%
+	// of the voting power on the network issued prevotes.
+	FullPrevoteMessageDelay metrics.Gauge
+
+	// ////////////////////////////////////
+	// Metrics for measuring performance
+	// ////////////////////////////////////
+
+	// Number of blocks that are we couldn't receive
+	MissingProposal metrics.Gauge
+
+	// Number of rounds turned over.
+	RoundFailures metrics.Histogram
+
+	// Execution time profiling of each step
+	DurationProposal           metrics.Histogram
+	DurationPrevote            metrics.Histogram
+	DurationPrecommit          metrics.Histogram
+	DurationCommitExecuting    metrics.Histogram
+	DurationCommitCommitting   metrics.Histogram
+	DurationCommitRechecking   metrics.Histogram
+	DurationWaitingForNewRound metrics.Histogram
+
+	DurationGaugeProposal           metrics.Gauge
+	DurationGaugePrevote            metrics.Gauge
+	DurationGaugePrecommit          metrics.Gauge
+	DurationGaugeCommitExecuting    metrics.Gauge
+	DurationGaugeCommitCommitting   metrics.Gauge
+	DurationGaugeCommitRechecking   metrics.Gauge
+	DurationGaugeWaitingForNewRound metrics.Gauge
 }
 
 // PrometheusMetrics returns Metrics build using Prometheus client library.
@@ -138,7 +181,7 @@ func PrometheusMetrics(namespace string, labelsAndValues ...string) *Metrics {
 			Name:      "byzantine_validators_power",
 			Help:      "Total power of the byzantine validators.",
 		}, labels).With(labelsAndValues...),
-		BlockIntervalSeconds: prometheus.NewHistogramFrom(stdprometheus.HistogramOpts{
+		BlockIntervalSeconds: prometheus.NewGaugeFrom(stdprometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: MetricsSubsystem,
 			Name:      "block_interval_seconds",
@@ -186,6 +229,124 @@ func PrometheusMetrics(namespace string, labelsAndValues ...string) *Metrics {
 			Name:      "block_parts",
 			Help:      "Number of blockparts transmitted by peer.",
 		}, append(labels, "peer_id")).With(labelsAndValues...),
+		QuorumPrevoteMessageDelay: prometheus.NewGaugeFrom(stdprometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "quorum_prevote_message_delay",
+			Help: "Difference in seconds between the proposal timestamp and the timestamp " +
+				"of the latest prevote that achieved a quorum in the prevote step.",
+		}, labels).With(labelsAndValues...),
+		FullPrevoteMessageDelay: prometheus.NewGaugeFrom(stdprometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "full_prevote_message_delay",
+			Help: "Difference in seconds between the proposal timestamp and the timestamp " +
+				"of the latest prevote that achieved 100% of the voting power in the prevote step.",
+		}, labels).With(labelsAndValues...),
+		MissingProposal: prometheus.NewGaugeFrom(stdprometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "missing_proposal",
+			Help:      "Number of blocks we couldn't receive",
+		}, labels).With(labelsAndValues...),
+		RoundFailures: prometheus.NewHistogramFrom(stdprometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "round_failures",
+			Help:      "Number of rounds failed on consensus",
+			Buckets:   stdprometheus.LinearBuckets(0, 1, 5),
+		}, labels).With(labelsAndValues...),
+		DurationProposal: prometheus.NewHistogramFrom(stdprometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "duration_proposal",
+			Help:      "Duration of proposal step",
+			Buckets:   stdprometheus.LinearBuckets(100, 100, 10),
+		}, labels).With(labelsAndValues...),
+		DurationPrevote: prometheus.NewHistogramFrom(stdprometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "duration_prevote",
+			Help:      "Duration of prevote step",
+			Buckets:   stdprometheus.LinearBuckets(100, 100, 10),
+		}, labels).With(labelsAndValues...),
+		DurationPrecommit: prometheus.NewHistogramFrom(stdprometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "duration_precommit",
+			Help:      "Duration of precommit step",
+			Buckets:   stdprometheus.LinearBuckets(100, 100, 10),
+		}, labels).With(labelsAndValues...),
+		DurationCommitExecuting: prometheus.NewHistogramFrom(stdprometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "duration_commit_executing",
+			Help:      "Duration of executing block txs",
+			Buckets:   stdprometheus.LinearBuckets(100, 100, 10),
+		}, labels).With(labelsAndValues...),
+		DurationCommitCommitting: prometheus.NewHistogramFrom(stdprometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "duration_commit_committing",
+			Help:      "Duration of committing updated state",
+			Buckets:   stdprometheus.LinearBuckets(100, 100, 10),
+		}, labels).With(labelsAndValues...),
+		DurationCommitRechecking: prometheus.NewHistogramFrom(stdprometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "duration_commit_rechecking",
+			Help:      "Duration of rechecking mempool txs",
+			Buckets:   stdprometheus.LinearBuckets(100, 100, 10),
+		}, labels).With(labelsAndValues...),
+		DurationWaitingForNewRound: prometheus.NewHistogramFrom(stdprometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "duration_waiting_for_new_round",
+			Help:      "Duration of waiting for next new round",
+			Buckets:   stdprometheus.LinearBuckets(100, 100, 10),
+		}, labels).With(labelsAndValues...),
+		DurationGaugeProposal: prometheus.NewGaugeFrom(stdprometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "duration_gauge_proposal",
+			Help:      "Duration of proposal step",
+		}, labels).With(labelsAndValues...),
+		DurationGaugePrevote: prometheus.NewGaugeFrom(stdprometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "duration_gauge_prevote",
+			Help:      "Duration of prevote step",
+		}, labels).With(labelsAndValues...),
+		DurationGaugePrecommit: prometheus.NewGaugeFrom(stdprometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "duration_gauge_precommit",
+			Help:      "Duration of precommit step",
+		}, labels).With(labelsAndValues...),
+		DurationGaugeCommitExecuting: prometheus.NewGaugeFrom(stdprometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "duration_gauge_commit_executing",
+			Help:      "Duration of executing block txs",
+		}, labels).With(labelsAndValues...),
+		DurationGaugeCommitCommitting: prometheus.NewGaugeFrom(stdprometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "duration_gauge_commit_committing",
+			Help:      "Duration of committing updated state",
+		}, labels).With(labelsAndValues...),
+		DurationGaugeCommitRechecking: prometheus.NewGaugeFrom(stdprometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "duration_gauge_commit_rechecking",
+			Help:      "Duration of rechecking mempool txs",
+		}, labels).With(labelsAndValues...),
+		DurationGaugeWaitingForNewRound: prometheus.NewGaugeFrom(stdprometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "duration_gauge_waiting_for_new_round",
+			Help:      "Duration of waiting for next new round",
+		}, labels).With(labelsAndValues...),
 	}
 }
 
@@ -207,14 +368,35 @@ func NopMetrics() *Metrics {
 		ByzantineValidators:      discard.NewGauge(),
 		ByzantineValidatorsPower: discard.NewGauge(),
 
-		BlockIntervalSeconds: discard.NewHistogram(),
+		BlockIntervalSeconds: discard.NewGauge(),
 
-		NumTxs:          discard.NewGauge(),
-		BlockSizeBytes:  discard.NewGauge(),
-		TotalTxs:        discard.NewGauge(),
-		CommittedHeight: discard.NewGauge(),
-		FastSyncing:     discard.NewGauge(),
-		StateSyncing:    discard.NewGauge(),
-		BlockParts:      discard.NewCounter(),
+		NumTxs:                    discard.NewGauge(),
+		BlockSizeBytes:            discard.NewGauge(),
+		TotalTxs:                  discard.NewGauge(),
+		CommittedHeight:           discard.NewGauge(),
+		FastSyncing:               discard.NewGauge(),
+		StateSyncing:              discard.NewGauge(),
+		BlockParts:                discard.NewCounter(),
+		QuorumPrevoteMessageDelay: discard.NewGauge(),
+		FullPrevoteMessageDelay:   discard.NewGauge(),
+
+		MissingProposal: discard.NewGauge(),
+		RoundFailures:   discard.NewHistogram(),
+
+		DurationProposal:           discard.NewHistogram(),
+		DurationPrevote:            discard.NewHistogram(),
+		DurationPrecommit:          discard.NewHistogram(),
+		DurationCommitExecuting:    discard.NewHistogram(),
+		DurationCommitCommitting:   discard.NewHistogram(),
+		DurationCommitRechecking:   discard.NewHistogram(),
+		DurationWaitingForNewRound: discard.NewHistogram(),
+
+		DurationGaugeProposal:           discard.NewGauge(),
+		DurationGaugePrevote:            discard.NewGauge(),
+		DurationGaugePrecommit:          discard.NewGauge(),
+		DurationGaugeCommitExecuting:    discard.NewGauge(),
+		DurationGaugeCommitCommitting:   discard.NewGauge(),
+		DurationGaugeCommitRechecking:   discard.NewGauge(),
+		DurationGaugeWaitingForNewRound: discard.NewGauge(),
 	}
 }

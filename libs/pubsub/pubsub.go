@@ -39,8 +39,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/tendermint/tendermint/libs/service"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
+	"github.com/Finschia/ostracon/libs/service"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
 )
 
 type operation int
@@ -194,7 +194,7 @@ func (s *Server) subscribe(ctx context.Context, clientID string, query Query, ou
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-s.Quit():
-		return nil, nil
+		return nil, errors.New("service is shutting down")
 	}
 }
 

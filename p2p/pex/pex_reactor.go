@@ -8,13 +8,14 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 
-	"github.com/tendermint/tendermint/libs/cmap"
-	tmmath "github.com/tendermint/tendermint/libs/math"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
-	"github.com/tendermint/tendermint/libs/service"
-	"github.com/tendermint/tendermint/p2p"
-	"github.com/tendermint/tendermint/p2p/conn"
 	tmp2p "github.com/tendermint/tendermint/proto/tendermint/p2p"
+
+	"github.com/Finschia/ostracon/libs/cmap"
+	tmmath "github.com/Finschia/ostracon/libs/math"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
+	"github.com/Finschia/ostracon/libs/service"
+	"github.com/Finschia/ostracon/p2p"
+	"github.com/Finschia/ostracon/p2p/conn"
 )
 
 type Peer = p2p.Peer
@@ -122,6 +123,9 @@ type ReactorConfig struct {
 	// Seeds is a list of addresses reactor may use
 	// if it can't connect to peers in the addrbook.
 	Seeds []string
+
+	// Receive channel buffer size
+	RecvBufSize int
 }
 
 type _attemptsToDial struct {
@@ -130,7 +134,7 @@ type _attemptsToDial struct {
 }
 
 // NewReactor creates new PEX reactor.
-func NewReactor(b AddrBook, config *ReactorConfig) *Reactor {
+func NewReactor(b AddrBook, async bool, config *ReactorConfig) *Reactor {
 	r := &Reactor{
 		book:                 b,
 		config:               config,
@@ -139,13 +143,19 @@ func NewReactor(b AddrBook, config *ReactorConfig) *Reactor {
 		lastReceivedRequests: cmap.NewCMap(),
 		crawlPeerInfos:       make(map[p2p.ID]crawlPeerInfo),
 	}
-	r.BaseReactor = *p2p.NewBaseReactor("PEX", r)
+	r.BaseReactor = *p2p.NewBaseReactor("PEX", r, async, config.RecvBufSize)
 	return r
 }
 
 // OnStart implements BaseService
 func (r *Reactor) OnStart() error {
-	err := r.book.Start()
+	// call BaseReactor's OnStart()
+	err := r.BaseReactor.OnStart()
+	if err != nil {
+		return err
+	}
+
+	err = r.book.Start()
 	if err != nil && err != service.ErrAlreadyStarted {
 		return err
 	}
@@ -166,6 +176,7 @@ func (r *Reactor) OnStart() error {
 	} else {
 		go r.ensurePeersRoutine()
 	}
+
 	return nil
 }
 
@@ -387,7 +398,6 @@ func (r *Reactor) ReceiveAddrs(addrs []*p2p.NetAddress, src Peer) error {
 		// If this address came from a seed node, try to connect to it without
 		// waiting (#2093)
 		if srcIsSeed {
-			r.Logger.Info("Will dial address, which came from seed", "addr", netAddr, "seed", srcAddr)
 			go func(addr *p2p.NetAddress) {
 				err := r.dialPeer(addr)
 				if err != nil {
@@ -395,7 +405,7 @@ func (r *Reactor) ReceiveAddrs(addrs []*p2p.NetAddress, src Peer) error {
 					case errMaxAttemptsToDial, errTooEarlyToDial, p2p.ErrCurrentlyDialingOrExistingAddress:
 						r.Logger.Debug(err.Error(), "addr", addr)
 					default:
-						r.Logger.Error(err.Error(), "addr", addr)
+						r.Logger.Debug(err.Error(), "addr", addr)
 					}
 				}
 			}(netAddr)
@@ -491,7 +501,6 @@ func (r *Reactor) ensurePeers() {
 		// TODO: consider moving some checks from toDial into here
 		// so we don't even consider dialing peers that we want to wait
 		// before dialling again, or have dialed too many times already
-		r.Logger.Info("Will dial address", "addr", try)
 		toDial[try.ID] = try
 	}
 
@@ -504,7 +513,7 @@ func (r *Reactor) ensurePeers() {
 				case errMaxAttemptsToDial, errTooEarlyToDial:
 					r.Logger.Debug(err.Error(), "addr", addr)
 				default:
-					r.Logger.Error(err.Error(), "addr", addr)
+					r.Logger.Debug(err.Error(), "addr", addr)
 				}
 			}
 		}(addr)
@@ -717,7 +726,7 @@ func (r *Reactor) crawlPeers(addrs []*p2p.NetAddress) {
 			case errMaxAttemptsToDial, errTooEarlyToDial, p2p.ErrCurrentlyDialingOrExistingAddress:
 				r.Logger.Debug(err.Error(), "addr", addr)
 			default:
-				r.Logger.Error(err.Error(), "addr", addr)
+				r.Logger.Debug(err.Error(), "addr", addr)
 			}
 			continue
 		}

@@ -70,7 +70,7 @@
 //   rpcserver.RegisterRPCFuncs(mux, Routes)
 //   wm := rpcserver.NewWebsocketManager(Routes)
 //   mux.HandleFunc("/websocket", wm.WebsocketHandler)
-//   logger := log.NewTMLogger(log.NewSyncWriter(os.Stdout))
+//   logger := log.NewOCLogger(log.NewSyncWriter(os.Stdout))
 //   listener, err := rpc.Listen("0.0.0.0:8080", rpcserver.Config{})
 //   if err != nil { panic(err) }
 //   go rpcserver.Serve(listener, mux, logger)
@@ -81,5 +81,5 @@
 //
 // Examples
 //
-// - [Tendermint](https://github.com/tendermint/tendermint/blob/master/rpc/core/routes.go)
+// - [Ostracon](https://github.com/Finschia/ostracon/blob/main/rpc/core/routes.go)
 package jsonrpc

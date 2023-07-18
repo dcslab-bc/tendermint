@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tendermint/tendermint/libs/bytes"
-	"github.com/tendermint/tendermint/libs/log"
-	tmpubsub "github.com/tendermint/tendermint/libs/pubsub"
-	tmquery "github.com/tendermint/tendermint/libs/pubsub/query"
-	nm "github.com/tendermint/tendermint/node"
-	rpcclient "github.com/tendermint/tendermint/rpc/client"
-	"github.com/tendermint/tendermint/rpc/core"
-	ctypes "github.com/tendermint/tendermint/rpc/core/types"
-	rpctypes "github.com/tendermint/tendermint/rpc/jsonrpc/types"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/libs/bytes"
+	"github.com/Finschia/ostracon/libs/log"
+	tmpubsub "github.com/Finschia/ostracon/libs/pubsub"
+	tmquery "github.com/Finschia/ostracon/libs/pubsub/query"
+	nm "github.com/Finschia/ostracon/node"
+	rpcclient "github.com/Finschia/ostracon/rpc/client"
+	"github.com/Finschia/ostracon/rpc/core"
+	ctypes "github.com/Finschia/ostracon/rpc/core/types"
+	rpctypes "github.com/Finschia/ostracon/rpc/jsonrpc/types"
+	"github.com/Finschia/ostracon/types"
 )
 
 /*
@@ -25,14 +25,14 @@ This implementation is useful for:
 
 * Running tests against a node in-process without the overhead
 of going through an http server
-* Communication between an ABCI app and Tendermint core when they
+* Communication between an ABCI app and Ostracon core when they
 are compiled in process.
 
 For real clients, you probably want to use client.HTTP.  For more
 powerful control during testing, you probably want the "client/mock" package.
 
-You can subscribe for any event published by Tendermint using Subscribe method.
-Note delivery is best-effort. If you don't read events fast enough, Tendermint
+You can subscribe for any event published by Ostracon using Subscribe method.
+Note delivery is best-effort. If you don't read events fast enough, Ostracon
 might cancel the subscription. The client will attempt to resubscribe (you
 don't need to do anything). It will keep trying indefinitely with exponential
 backoff (10ms -> 20ms -> 40ms) until successful.
@@ -153,6 +153,10 @@ func (c *Local) Genesis(ctx context.Context) (*ctypes.ResultGenesis, error) {
 	return core.Genesis(c.ctx)
 }
 
+func (c *Local) GenesisChunked(ctx context.Context, id uint) (*ctypes.ResultGenesisChunk, error) {
+	return core.GenesisChunked(c.ctx, id)
+}
+
 func (c *Local) Block(ctx context.Context, height *int64) (*ctypes.ResultBlock, error) {
 	return core.Block(c.ctx, height)
 }
@@ -178,7 +182,7 @@ func (c *Local) Tx(ctx context.Context, hash []byte, prove bool) (*ctypes.Result
 }
 
 func (c *Local) TxSearch(
-	ctx context.Context,
+	_ context.Context,
 	query string,
 	prove bool,
 	page,
@@ -186,6 +190,15 @@ func (c *Local) TxSearch(
 	orderBy string,
 ) (*ctypes.ResultTxSearch, error) {
 	return core.TxSearch(c.ctx, query, prove, page, perPage, orderBy)
+}
+
+func (c *Local) BlockSearch(
+	_ context.Context,
+	query string,
+	page, perPage *int,
+	orderBy string,
+) (*ctypes.ResultBlockSearch, error) {
+	return core.BlockSearch(c.ctx, query, page, perPage, orderBy)
 }
 
 func (c *Local) BroadcastEvidence(ctx context.Context, ev types.Evidence) (*ctypes.ResultBroadcastEvidence, error) {

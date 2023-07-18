@@ -2,6 +2,7 @@ package light_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -11,12 +12,12 @@ import (
 
 	dbm "github.com/tendermint/tm-db"
 
-	"github.com/tendermint/tendermint/libs/log"
-	"github.com/tendermint/tendermint/light"
-	"github.com/tendermint/tendermint/light/provider"
-	mockp "github.com/tendermint/tendermint/light/provider/mock"
-	dbs "github.com/tendermint/tendermint/light/store/db"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/libs/log"
+	"github.com/Finschia/ostracon/light"
+	"github.com/Finschia/ostracon/light/provider"
+	mockp "github.com/Finschia/ostracon/light/provider/mock"
+	dbs "github.com/Finschia/ostracon/light/store/db"
+	"github.com/Finschia/ostracon/types"
 )
 
 const (
@@ -25,7 +26,7 @@ const (
 
 var (
 	ctx      = context.Background()
-	keys     = genPrivKeys(4)
+	keys     = genPrivKeys(10)
 	vals     = keys.ToValidators(20, 10)
 	bTime, _ = time.Parse(time.RFC3339, "2006-01-02T15:04:05Z")
 	h1       = keys.GenSignedHeader(chainID, 1, bTime, nil, vals, vals,
@@ -62,8 +63,7 @@ var (
 		headerSet,
 		valSet,
 	)
-	deadNode      = mockp.NewDeadMock(chainID)
-	largeFullNode = mockp.New(genMockNode(chainID, 10, 3, 0, bTime))
+	deadNode = mockp.NewDeadMock(chainID)
 )
 
 func TestValidateTrustOptions(t *testing.T) {
@@ -113,8 +113,10 @@ func TestValidateTrustOptions(t *testing.T) {
 }
 
 func TestMock(t *testing.T) {
-	l, _ := fullNode.LightBlock(ctx, 3)
-	assert.Equal(t, int64(3), l.Height)
+	l, err := fullNode.LightBlock(ctx, 3)
+	if assert.NoError(t, err) {
+		assert.Equal(t, int64(3), l.Height)
+	}
 }
 
 func TestClient_SequentialVerification(t *testing.T) {
@@ -395,7 +397,7 @@ func TestClientLargeBisectionVerification(t *testing.T) {
 		veryLargeFullNode,
 		[]provider.Provider{veryLargeFullNode},
 		dbs.New(dbm.NewMemDB(), chainID),
-		light.SkippingVerification(light.DefaultTrustLevel),
+		light.SequentialVerification(),
 	)
 	require.NoError(t, err)
 	h, err := c.Update(ctx, bTime.Add(100*time.Minute))
@@ -417,7 +419,7 @@ func TestClientBisectionBetweenTrustedHeaders(t *testing.T) {
 		fullNode,
 		[]provider.Provider{fullNode},
 		dbs.New(dbm.NewMemDB(), chainID),
-		light.SkippingVerification(light.DefaultTrustLevel),
+		light.SequentialVerification(),
 	)
 	require.NoError(t, err)
 
@@ -776,10 +778,11 @@ func TestClientReplacesPrimaryWithWitnessIfPrimaryIsUnavailable(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotEqual(t, c.Primary(), deadNode)
-	assert.Equal(t, 1, len(c.Witnesses()))
+	assert.Equal(t, 2, len(c.Witnesses()))
 }
 
 func TestClient_BackwardsVerification(t *testing.T) {
+	largeFullNode := mockp.New(genMockNode(chainID, 10, 3, 0, bTime))
 	{
 		trustHeader, _ := largeFullNode.LightBlock(ctx, 6)
 		c, err := light.NewClient(
@@ -909,13 +912,14 @@ func TestClient_NewClientFromTrustedStore(t *testing.T) {
 
 func TestClientRemovesWitnessIfItSendsUsIncorrectHeader(t *testing.T) {
 	// different headers hash then primary plus less than 1/3 signed (no fork)
+	h2 := keys.GenSignedHeaderLastBlockID(chainID, 2, bTime.Add(30*time.Minute), nil, vals, vals,
+		hash("app_hash2"), hash("cons_hash"), hash("results_hash"),
+		len(keys), len(keys), types.BlockID{Hash: h1.Hash()})
 	badProvider1 := mockp.New(
 		chainID,
 		map[int64]*types.SignedHeader{
 			1: h1,
-			2: keys.GenSignedHeaderLastBlockID(chainID, 2, bTime.Add(30*time.Minute), nil, vals, vals,
-				hash("app_hash2"), hash("cons_hash"), hash("results_hash"),
-				len(keys), len(keys), types.BlockID{Hash: h1.Hash()}),
+			2: h2,
 		},
 		map[int64]*types.ValidatorSet{
 			1: vals,
@@ -935,7 +939,8 @@ func TestClientRemovesWitnessIfItSendsUsIncorrectHeader(t *testing.T) {
 		},
 	)
 
-	lb1, _ := badProvider1.LightBlock(ctx, 2)
+	lb1, err := badProvider1.LightBlock(ctx, 2)
+	require.NoError(t, err)
 	require.NotEqual(t, lb1.Hash(), l1.Hash())
 
 	c, err := light.NewClient(
@@ -1029,9 +1034,8 @@ func TestClientPrunesHeadersAndValidatorSets(t *testing.T) {
 }
 
 func TestClientEnsureValidHeadersAndValSets(t *testing.T) {
-	emptyValSet := &types.ValidatorSet{
+	emptyValidatorSet := &types.ValidatorSet{
 		Validators: nil,
-		Proposer:   nil,
 	}
 
 	testCases := []struct {
@@ -1067,7 +1071,7 @@ func TestClientEnsureValidHeadersAndValSets(t *testing.T) {
 			map[int64]*types.ValidatorSet{
 				1: vals,
 				2: vals,
-				3: emptyValSet,
+				3: emptyValidatorSet,
 			},
 			true,
 		},
@@ -1097,5 +1101,63 @@ func TestClientEnsureValidHeadersAndValSets(t *testing.T) {
 			assert.NoError(t, err)
 		}
 	}
+
+}
+
+func TestClientHandlesContexts(t *testing.T) {
+	p := mockp.New(genMockNode(chainID, 100, 10, 1, bTime))
+	genBlock, err := p.LightBlock(ctx, 1)
+	require.NoError(t, err)
+
+	// instantiate the light client with a timeout
+	ctxTimeOut, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+	defer cancel()
+	_, err = light.NewClient(
+		ctxTimeOut,
+		chainID,
+		light.TrustOptions{
+			Period: 24 * time.Hour,
+			Height: 1,
+			Hash:   genBlock.Hash(),
+		},
+		p,
+		[]provider.Provider{p, p},
+		dbs.New(dbm.NewMemDB(), chainID),
+	)
+	require.Error(t, ctxTimeOut.Err())
+	require.Error(t, err)
+	require.True(t, errors.Is(err, context.DeadlineExceeded))
+
+	// instantiate the client for real
+	c, err := light.NewClient(
+		ctx,
+		chainID,
+		light.TrustOptions{
+			Period: 24 * time.Hour,
+			Height: 1,
+			Hash:   genBlock.Hash(),
+		},
+		p,
+		[]provider.Provider{p, p},
+		dbs.New(dbm.NewMemDB(), chainID),
+	)
+	require.NoError(t, err)
+
+	// verify a block with a timeout
+	ctxTimeOutBlock, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+	defer cancel()
+	_, err = c.VerifyLightBlockAtHeight(ctxTimeOutBlock, 100, bTime.Add(100*time.Minute))
+	require.Error(t, ctxTimeOutBlock.Err())
+	require.Error(t, err)
+	require.True(t, errors.Is(err, context.DeadlineExceeded))
+
+	// verify a block with a cancel
+	ctxCancel, cancel := context.WithCancel(ctx)
+	defer cancel()
+	time.AfterFunc(10*time.Millisecond, cancel)
+	_, err = c.VerifyLightBlockAtHeight(ctxCancel, 100, bTime.Add(100*time.Minute))
+	require.Error(t, ctxCancel.Err())
+	require.Error(t, err)
+	require.True(t, errors.Is(err, context.Canceled))
 
 }

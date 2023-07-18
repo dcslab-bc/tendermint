@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"strings"
 
-	tmjson "github.com/tendermint/tendermint/libs/json"
+	tmjson "github.com/Finschia/ostracon/libs/json"
 )
 
 // a wrapper to emulate a sum type: jsonrpcid = string | int
@@ -57,27 +57,31 @@ type RPCRequest struct {
 
 // UnmarshalJSON custom JSON unmarshalling due to jsonrpcid being string or int
 func (req *RPCRequest) UnmarshalJSON(data []byte) error {
-	unsafeReq := &struct {
+	unsafeReq := struct {
 		JSONRPC string          `json:"jsonrpc"`
 		ID      interface{}     `json:"id,omitempty"`
 		Method  string          `json:"method"`
 		Params  json.RawMessage `json:"params"` // must be map[string]interface{} or []interface{}
 	}{}
+
 	err := json.Unmarshal(data, &unsafeReq)
 	if err != nil {
 		return err
 	}
+
+	if unsafeReq.ID == nil { // notification
+		return nil
+	}
+
 	req.JSONRPC = unsafeReq.JSONRPC
 	req.Method = unsafeReq.Method
 	req.Params = unsafeReq.Params
-	if unsafeReq.ID == nil {
-		return nil
-	}
 	id, err := idFromInterface(unsafeReq.ID)
 	if err != nil {
 		return err
 	}
 	req.ID = id
+
 	return nil
 }
 
@@ -187,7 +191,7 @@ func NewRPCSuccessResponse(id jsonrpcid, res interface{}) RPCResponse {
 		var js []byte
 		js, err := tmjson.Marshal(res)
 		if err != nil {
-			return RPCInternalError(id, fmt.Errorf("error marshalling response: %w", err))
+			return RPCInternalError(id, fmt.Errorf("error marshaling response: %w", err))
 		}
 		rawMsg = json.RawMessage(js)
 	}

@@ -1,161 +1,101 @@
-# Tendermint
+# Ostracon
 
-![banner](docs/tendermint-core-image.jpg)
+![example workflow](https://github.com/Finschia/ostracon/actions/workflows/build.yml/badge.svg)
+![example workflow](https://github.com/Finschia/ostracon/actions/workflows/coverage.yml/badge.svg)
 
-[Byzantine-Fault Tolerant](https://en.wikipedia.org/wiki/Byzantine_fault_tolerance)
-[State Machines](https://en.wikipedia.org/wiki/State_machine_replication).
-Or [Blockchain](<https://en.wikipedia.org/wiki/Blockchain_(database)>), for short.
+[Ostracon](docs/en/01-overview.md "Ostracon: A Fast, Secure Consensus Layer for The Blockchain of New Token Economy")
+is forked from Tendermint Core [v0.34.19](https://github.com/tendermint/tendermint/tree/v0.34.19) at 2021-03-15.
 
-[![version](https://img.shields.io/github/tag/tendermint/tendermint.svg)](https://github.com/tendermint/tendermint/releases/latest)
-[![API Reference](https://camo.githubusercontent.com/915b7be44ada53c290eb157634330494ebe3e30a/68747470733a2f2f676f646f632e6f72672f6769746875622e636f6d2f676f6c616e672f6764646f3f7374617475732e737667)](https://pkg.go.dev/github.com/tendermint/tendermint)
-[![Go version](https://img.shields.io/badge/go-1.15-blue.svg)](https://github.com/moovweb/gvm)
-[![Discord chat](https://img.shields.io/discord/669268347736686612.svg)](https://discord.gg/AzefAFd)
-[![license](https://img.shields.io/github/license/tendermint/tendermint.svg)](https://github.com/tendermint/tendermint/blob/master/LICENSE)
-[![tendermint/tendermint](https://tokei.rs/b1/github/tendermint/tendermint?category=lines)](https://github.com/tendermint/tendermint)
-[![Sourcegraph](https://sourcegraph.com/github.com/tendermint/tendermint/-/badge.svg)](https://sourcegraph.com/github.com/tendermint/tendermint?badge)
+**Node**: Requires [Go 1.18+](https://golang.org/dl/)
 
-| Branch | Tests                                                                                                                                                                                                                                                  | Coverage                                                                                                                             | Linting                                                                    |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
-| master | [![CircleCI](https://circleci.com/gh/tendermint/tendermint/tree/master.svg?style=shield)](https://circleci.com/gh/tendermint/tendermint/tree/master) </br> ![Tests](https://github.com/tendermint/tendermint/workflows/Tests/badge.svg?branch=master) | [![codecov](https://codecov.io/gh/tendermint/tendermint/branch/master/graph/badge.svg)](https://codecov.io/gh/tendermint/tendermint) | ![Lint](https://github.com/tendermint/tendermint/workflows/Lint/badge.svg) |
+**Warnings**: Initial development is in progress, but there has not yet been a stable.
 
-Tendermint Core is Byzantine Fault Tolerant (BFT) middleware that takes a state transition machine - written in any programming language -
-and securely replicates it on many machines.
+[](docs/en/01-overview.md)
 
-For protocol details, see [the specification](https://github.com/tendermint/spec).
+# Quick Start
 
-For detailed analysis of the consensus protocol, including safety and liveness proofs,
-see our recent paper, "[The latest gossip on BFT consensus](https://arxiv.org/abs/1807.04938)".
+## git clone
+```shell
+git clone https://github.com/Finschia/ostracon.git
+# or
+git clone git@github.com:Finschia/ostracon.git
+```
 
-## Releases
+### git clone with recursive if you want to use libsodium
+```shell
+git clone --recursive https://github.com/Finschia/ostracon.git
+# or
+git clone --recursive git@github.com:Finschia/ostracon.git
+```
 
-Please do not depend on master as your production branch. Use [releases](https://github.com/tendermint/tendermint/releases) instead.
+### git submodule if you forget to clone with submodule
+```shell
+git submodule update --init --recursive
+```
 
-Tendermint is being used in production in both private and public environments,
-most notably the blockchains of the [Cosmos Network](https://cosmos.network/).
-However, we are still making breaking changes to the protocol and the APIs and have not yet released v1.0.
-See below for more details about [versioning](#versioning).
+## Local Standalone
+**Build**
+ ```sh
+ make build     # go help build
+ make install   # go help install
+ ```
 
-In any case, if you intend to run Tendermint in production, we're happy to help. You can
-contact us [over email](mailto:hello@interchain.berlin) or [join the chat](https://discord.gg/AzefAFd).
+**Run**
+ ```sh
+ ostracon init
+ ostracon node --proxy_app=kvstore                # Run a node
+ ```
 
-## Security
+Before running it, don't forget to cleanup the old files:
+ ```sh
+ # Clear the build folder
+ rm -rf ~/.ostracon
+ ```
 
-To report a security vulnerability, see our [bug bounty
-program](https://hackerone.com/tendermint). 
-For examples of the kinds of bugs we're looking for, see [our security policy](SECURITY.md)
+**Visit with your browser**
+* Node: http://localhost:26657/
 
-We also maintain a dedicated mailing list for security updates. We will only ever use this mailing list
-to notify you of vulnerabilities and fixes in Tendermint Core. You can subscribe [here](http://eepurl.com/gZ5hQD).
+## Localnet(4 nodes) with Docker
+**Build Docker Image**
 
-## Minimum requirements
+(optionally) Build the linux binary for localnode in ./build
+ ```sh
+ make build-localnode
+ ```
+(optionally) Build ostracon/localnode image
+ ```sh
+ make build-localnode-docker
+ ```
 
-| Requirement | Notes            |
-| ----------- | ---------------- |
-| Go version  | Go1.15 or higher |
+**Run localnet**
 
-## Documentation
+To start 4 nodes
+ ```sh
+ make localnet-start
+ ```
 
-Complete documentation can be found on the [website](https://docs.tendermint.com/master/).
+Before running it, don't forget to cleanup the old files
+ ```sh
+ rm -rf ./build/node*
+ ```
 
-### Install
+**Visit with your browser**
+* Node: http://localhost:26657/
 
-See the [install instructions](/docs/introduction/install.md).
+## Linux Docker
+**Build Docker Image**
 
-### Quick Start
+Build the linux binary
+ ```sh
+ make build-linux-docker
+ ```
 
-- [Single node](/docs/introduction/quick-start.md)
-- [Local cluster using docker-compose](/docs/networks/docker-compose.md)
-- [Remote cluster using Terraform and Ansible](/docs/networks/terraform-and-ansible.md)
-- [Join the Cosmos testnet](https://cosmos.network/testnet)
+**Run a linux docker node**
 
-## Contributing
+To start a linux node
+ ```sh
+ make standalone-linux-docker
+ ```
 
-Please abide by the [Code of Conduct](CODE_OF_CONDUCT.md) in all interactions.
-
-Before contributing to the project, please take a look at the [contributing guidelines](CONTRIBUTING.md)
-and the [style guide](STYLE_GUIDE.md). You may also find it helpful to read the
-[specifications](https://github.com/tendermint/spec), watch the [Developer Sessions](/docs/DEV_SESSIONS.md), 
-and familiarize yourself with our
-[Architectural Decision Records](https://github.com/tendermint/tendermint/tree/master/docs/architecture).
-
-## Versioning
-
-### Semantic Versioning
-
-Tendermint uses [Semantic Versioning](http://semver.org/) to determine when and how the version changes.
-According to SemVer, anything in the public API can change at any time before version 1.0.0
-
-To provide some stability to Tendermint users in these 0.X.X days, the MINOR version is used
-to signal breaking changes across a subset of the total public API. This subset includes all
-interfaces exposed to other processes (cli, rpc, p2p, etc.), but does not
-include the Go APIs.
-
-That said, breaking changes in the following packages will be documented in the
-CHANGELOG even if they don't lead to MINOR version bumps:
-
-- crypto
-- config
-- libs
-    - bech32
-    - bits
-    - bytes
-    - json
-    - log
-    - math
-    - net
-    - os
-    - protoio
-    - rand
-    - sync
-    - strings
-    - service
-- node
-- rpc/client
-- types
-
-### Upgrades
-
-In an effort to avoid accumulating technical debt prior to 1.0.0,
-we do not guarantee that breaking changes (ie. bumps in the MINOR version)
-will work with existing Tendermint blockchains. In these cases you will
-have to start a new blockchain, or write something custom to get the old
-data into the new chain. However, any bump in the PATCH version should be 
-compatible with existing blockchain histories.
-
-
-For more information on upgrading, see [UPGRADING.md](./UPGRADING.md).
-
-### Supported Versions
-
-Because we are a small core team, we only ship patch updates, including security updates,
-to the most recent minor release and the second-most recent minor release. Consequently,
-we strongly recommend keeping Tendermint up-to-date. Upgrading instructions can be found
-in [UPGRADING.md](./UPGRADING.md).
-
-## Resources
-
-### Tendermint Core
-
-For details about the blockchain data structures and the p2p protocols, see the
-[Tendermint specification](https://docs.tendermint.com/master/spec/).
-
-For details on using the software, see the [documentation](/docs/) which is also
-hosted at: <https://docs.tendermint.com/master/>
-
-### Tools
-
-Benchmarking is provided by [`tm-load-test`](https://github.com/informalsystems/tm-load-test).
-Additional tooling can be found in [/docs/tools](/docs/tools).
-
-### Applications
-
-- [Cosmos SDK](http://github.com/cosmos/cosmos-sdk); a cryptocurrency application framework
-- [Ethermint](http://github.com/cosmos/ethermint); Ethereum on Tendermint
-- [Many more](https://tendermint.com/ecosystem)
-
-### Research
-
-- [The latest gossip on BFT consensus](https://arxiv.org/abs/1807.04938)
-- [Master's Thesis on Tendermint](https://atrium.lib.uoguelph.ca/xmlui/handle/10214/9769)
-- [Original Whitepaper: "Tendermint: Consensus Without Mining"](https://tendermint.com/static/docs/tendermint.pdf)
-- [Blog](https://blog.cosmos.network/tendermint/home)
+**Visit with your browser**
+* Node: http://localhost:26657/

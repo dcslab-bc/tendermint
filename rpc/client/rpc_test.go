@@ -2,6 +2,7 @@ package client_test
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"math"
 	"net/http"
@@ -13,17 +14,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/libs/log"
-	tmmath "github.com/tendermint/tendermint/libs/math"
-	mempl "github.com/tendermint/tendermint/mempool"
-	"github.com/tendermint/tendermint/rpc/client"
-	rpchttp "github.com/tendermint/tendermint/rpc/client/http"
-	rpclocal "github.com/tendermint/tendermint/rpc/client/local"
-	ctypes "github.com/tendermint/tendermint/rpc/core/types"
-	rpcclient "github.com/tendermint/tendermint/rpc/jsonrpc/client"
-	rpctest "github.com/tendermint/tendermint/rpc/test"
-	"github.com/tendermint/tendermint/types"
+	abci "github.com/Finschia/ostracon/abci/types"
+	tmjson "github.com/Finschia/ostracon/libs/json"
+	"github.com/Finschia/ostracon/libs/log"
+	tmmath "github.com/Finschia/ostracon/libs/math"
+	"github.com/Finschia/ostracon/libs/net"
+	mempl "github.com/Finschia/ostracon/mempool"
+	"github.com/Finschia/ostracon/rpc/client"
+	rpchttp "github.com/Finschia/ostracon/rpc/client/http"
+	rpclocal "github.com/Finschia/ostracon/rpc/client/local"
+	ctypes "github.com/Finschia/ostracon/rpc/core/types"
+	rpcclient "github.com/Finschia/ostracon/rpc/jsonrpc/client"
+	rpctest "github.com/Finschia/ostracon/rpc/test"
+	"github.com/Finschia/ostracon/types"
 )
 
 var (
@@ -73,7 +76,7 @@ func TestNilCustomHTTPClient(t *testing.T) {
 
 func TestCustomHTTPClient(t *testing.T) {
 	remote := rpctest.GetConfig().RPC.ListenAddress
-	c, err := rpchttp.NewWithClient(remote, "/websocket", http.DefaultClient)
+	c, err := rpchttp.NewWithClient(remote, "/websocket", &http.Client{Timeout: 60 * time.Second})
 	require.Nil(t, err)
 	status, err := c.Status(context.Background())
 	require.NoError(t, err)
@@ -87,8 +90,7 @@ func TestCorsEnabled(t *testing.T) {
 	req, err := http.NewRequest("GET", remote, nil)
 	require.Nil(t, err, "%+v", err)
 	req.Header.Set("Origin", origin)
-	c := &http.Client{}
-	resp, err := c.Do(req)
+	resp, err := net.HttpRequest(req, 60*time.Second)
 	require.Nil(t, err, "%+v", err)
 	defer resp.Body.Close()
 
@@ -183,6 +185,31 @@ func TestGenesisAndValidators(t *testing.T) {
 		// make sure the current set is also the genesis set
 		assert.Equal(t, gval.Power, val.VotingPower)
 		assert.Equal(t, gval.PubKey, val.PubKey)
+	}
+}
+
+func TestGenesisChunked(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for _, c := range GetClients() {
+		first, err := c.GenesisChunked(ctx, 0)
+		require.NoError(t, err)
+
+		decoded := make([]string, 0, first.TotalChunks)
+		for i := 0; i < first.TotalChunks; i++ {
+			chunk, err := c.GenesisChunked(ctx, uint(i))
+			require.NoError(t, err)
+			data, err := base64.StdEncoding.DecodeString(chunk.Data)
+			require.NoError(t, err)
+			decoded = append(decoded, string(data))
+
+		}
+		doc := []byte(strings.Join(decoded, ""))
+
+		var out types.GenesisDoc
+		require.NoError(t, tmjson.Unmarshal(doc, &out),
+			"first: %+v, doc: %s", first, string(doc))
 	}
 }
 
@@ -343,8 +370,11 @@ func TestUnconfirmedTxs(t *testing.T) {
 
 	ch := make(chan *abci.Response, 1)
 	mempool := node.Mempool()
-	err := mempool.CheckTx(tx, func(resp *abci.Response) { ch <- resp }, mempl.TxInfo{})
-	require.NoError(t, err)
+	mempool.CheckTxAsync(tx, mempl.TxInfo{}, func(err error) {
+		require.NoError(t, err)
+	}, func(resp *abci.Response) {
+		ch <- resp
+	})
 
 	// wait for tx to arrive in mempoool.
 	select {
@@ -373,8 +403,11 @@ func TestNumUnconfirmedTxs(t *testing.T) {
 
 	ch := make(chan *abci.Response, 1)
 	mempool := node.Mempool()
-	err := mempool.CheckTx(tx, func(resp *abci.Response) { ch <- resp }, mempl.TxInfo{})
-	require.NoError(t, err)
+	mempool.CheckTxAsync(tx, mempl.TxInfo{}, func(err error) {
+		require.NoError(t, err)
+	}, func(resp *abci.Response) {
+		ch <- resp
+	})
 
 	// wait for tx to arrive in mempoool.
 	select {

@@ -17,12 +17,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	"github.com/tendermint/tendermint/crypto/sr25519"
-	"github.com/tendermint/tendermint/libs/async"
-	tmos "github.com/tendermint/tendermint/libs/os"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/crypto/ed25519"
+	"github.com/Finschia/ostracon/crypto/sr25519"
+	"github.com/Finschia/ostracon/libs/async"
+	tmos "github.com/Finschia/ostracon/libs/os"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
 )
 
 // Run go test -update from within this module
@@ -47,11 +47,12 @@ type privKeyWithNilPubKey struct {
 	orig crypto.PrivKey
 }
 
-func (pk privKeyWithNilPubKey) Bytes() []byte                   { return pk.orig.Bytes() }
-func (pk privKeyWithNilPubKey) Sign(msg []byte) ([]byte, error) { return pk.orig.Sign(msg) }
-func (pk privKeyWithNilPubKey) PubKey() crypto.PubKey           { return nil }
-func (pk privKeyWithNilPubKey) Equals(pk2 crypto.PrivKey) bool  { return pk.orig.Equals(pk2) }
-func (pk privKeyWithNilPubKey) Type() string                    { return "privKeyWithNilPubKey" }
+func (pk privKeyWithNilPubKey) Bytes() []byte                             { return pk.orig.Bytes() }
+func (pk privKeyWithNilPubKey) Sign(msg []byte) ([]byte, error)           { return pk.orig.Sign(msg) }
+func (pk privKeyWithNilPubKey) VRFProve(msg []byte) (crypto.Proof, error) { return nil, nil }
+func (pk privKeyWithNilPubKey) PubKey() crypto.PubKey                     { return nil }
+func (pk privKeyWithNilPubKey) Equals(pk2 crypto.PrivKey) bool            { return pk.orig.Equals(pk2) }
+func (pk privKeyWithNilPubKey) Type() string                              { return "privKeyWithNilPubKey" }
 
 func TestSecretConnectionHandshake(t *testing.T) {
 	fooSecConn, barSecConn := makeSecretConnPair(t)
@@ -194,7 +195,8 @@ func TestSecretConnectionReadWrite(t *testing.T) {
 	compareWritesReads := func(writes []string, reads []string) {
 		for {
 			// Pop next write & corresponding reads
-			var read, write string = "", writes[0]
+			var read = ""
+			var write = writes[0]
 			var readCount = 0
 			for _, readChunk := range reads {
 				read += readChunk

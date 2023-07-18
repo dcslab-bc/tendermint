@@ -5,18 +5,21 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/crypto/ed25519"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
+
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/crypto/ed25519"
 )
 
-// PrivValidator defines the functionality of a local Tendermint validator
+// PrivValidator defines the functionality of a local Ostracon validator
 // that signs votes and proposals, and never double signs.
 type PrivValidator interface {
 	GetPubKey() (crypto.PubKey, error)
 
 	SignVote(chainID string, vote *tmproto.Vote) error
 	SignProposal(chainID string, proposal *tmproto.Proposal) error
+
+	GenerateVRFProof(message []byte) (crypto.Proof, error)
 }
 
 type PrivValidatorsByAddress []PrivValidator
@@ -108,6 +111,11 @@ func (pv MockPV) ExtractIntoValidator(votingPower int64) *Validator {
 		PubKey:      pubKey,
 		VotingPower: votingPower,
 	}
+}
+
+// GenerateVRFProof implements PrivValidator.
+func (pv MockPV) GenerateVRFProof(message []byte) (crypto.Proof, error) {
+	return pv.PrivKey.VRFProve(message)
 }
 
 // String returns a string representation of the MockPV.

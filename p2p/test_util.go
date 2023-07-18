@@ -5,14 +5,14 @@ import (
 	"net"
 	"time"
 
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	"github.com/tendermint/tendermint/libs/log"
-	tmnet "github.com/tendermint/tendermint/libs/net"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/crypto/ed25519"
+	"github.com/Finschia/ostracon/libs/log"
+	tmnet "github.com/Finschia/ostracon/libs/net"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
 
-	"github.com/tendermint/tendermint/config"
-	"github.com/tendermint/tendermint/p2p/conn"
+	"github.com/Finschia/ostracon/config"
+	"github.com/Finschia/ostracon/p2p/conn"
 )
 
 const testCh = 0x01
@@ -43,7 +43,11 @@ func CreateRandomPeer(outbound bool) Peer {
 		mconn:    &conn.MConnection{},
 		metrics:  NopMetrics(),
 	}
-	p.SetLogger(log.TestingLogger().With("peer", addr))
+	if p.Logger == nil {
+		p.SetLogger(log.TestingLogger().With("peer", addr))
+	} else {
+		p.SetLogger(p.Logger.With("peer", addr))
+	}
 	return p
 }
 
@@ -78,7 +82,7 @@ const TestHost = "localhost"
 // NOTE: panics if any switch fails to start.
 func MakeConnectedSwitches(cfg *config.P2PConfig,
 	n int,
-	initSwitch func(int, *Switch) *Switch,
+	initSwitch func(int, *Switch, *config.P2PConfig) *Switch,
 	connect func([]*Switch, int, int),
 ) []*Switch {
 	switches := make([]*Switch, n)
@@ -177,7 +181,7 @@ func MakeSwitch(
 	cfg *config.P2PConfig,
 	i int,
 	network, version string,
-	initSwitch func(int, *Switch) *Switch,
+	initSwitch func(int, *Switch, *config.P2PConfig) *Switch,
 	opts ...SwitchOption,
 ) *Switch {
 
@@ -199,8 +203,12 @@ func MakeSwitch(
 	}
 
 	// TODO: let the config be passed in?
-	sw := initSwitch(i, NewSwitch(cfg, t, opts...))
-	sw.SetLogger(log.TestingLogger().With("switch", i))
+	sw := initSwitch(i, NewSwitch(cfg, t, opts...), cfg) // receive buffer size is all 1000 in test
+	if sw.Logger == nil {
+		sw.SetLogger(log.TestingLogger().With("switch", i))
+	} else {
+		sw.SetLogger(sw.Logger.With("switch", i))
+	}
 	sw.SetNodeKey(&nodeKey)
 
 	ni := nodeInfo.(DefaultNodeInfo)

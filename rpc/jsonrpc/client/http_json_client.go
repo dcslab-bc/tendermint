@@ -5,14 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
-	tmsync "github.com/tendermint/tendermint/libs/sync"
-	types "github.com/tendermint/tendermint/rpc/jsonrpc/types"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
+	types "github.com/Finschia/ostracon/rpc/jsonrpc/types"
 )
 
 const (
@@ -21,6 +22,11 @@ const (
 	protoWSS   = "wss"
 	protoWS    = "ws"
 	protoTCP   = "tcp"
+	protoUNIX  = "unix"
+
+	defaultMaxIdleConns          = 10000
+	defaultIdleConnTimeout       = 60 // sec
+	defaultExpectContinueTimeout = 1  // sec
 )
 
 //-------------------------------------------------------------
@@ -28,6 +34,8 @@ const (
 // Parsed URL structure
 type parsedURL struct {
 	url.URL
+
+	isUnixSocket bool
 }
 
 // Parse URL and set defaults
@@ -42,7 +50,16 @@ func newParsedURL(remoteAddr string) (*parsedURL, error) {
 		u.Scheme = protoTCP
 	}
 
-	return &parsedURL{*u}, nil
+	pu := &parsedURL{
+		URL:          *u,
+		isUnixSocket: false,
+	}
+
+	if u.Scheme == protoUNIX {
+		pu.isUnixSocket = true
+	}
+
+	return pu, nil
 }
 
 // Change protocol to HTTP for unknown protocols and TCP protocol - useful for RPC connections
@@ -65,8 +82,24 @@ func (u parsedURL) GetHostWithPath() string {
 
 // Get a trimmed address - useful for WS connections
 func (u parsedURL) GetTrimmedHostWithPath() string {
-	// replace / with . for http requests (kvstore domain)
+	// if it's not an unix socket we return the normal URL
+	if !u.isUnixSocket {
+		return u.GetHostWithPath()
+	}
+	// if it's a unix socket we replace the host slashes with a period
+	// this is because otherwise the http.Client would think that the
+	// domain is invalid.
 	return strings.ReplaceAll(u.GetHostWithPath(), "/", ".")
+}
+
+// GetDialAddress returns the endpoint to dial for the parsed URL
+func (u parsedURL) GetDialAddress() string {
+	// if it's not a unix socket we return the host, example: localhost:443
+	if !u.isUnixSocket {
+		return u.Host
+	}
+	// otherwise we return the path of the unix socket, ex /tmp/socket
+	return u.GetHostWithPath()
 }
 
 // Get a trimmed address with protocol - useful as address in RPC connections
@@ -189,7 +222,7 @@ func (c *Client) Call(
 
 	defer httpResponse.Body.Close()
 
-	responseBytes, err := ioutil.ReadAll(httpResponse.Body)
+	responseBytes, err := io.ReadAll(httpResponse.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -237,7 +270,7 @@ func (c *Client) sendBatch(ctx context.Context, requests []*jsonRPCBufferedReque
 
 	defer httpResponse.Body.Close()
 
-	responseBytes, err := ioutil.ReadAll(httpResponse.Body)
+	responseBytes, err := io.ReadAll(httpResponse.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read response body: %w", err)
 	}
@@ -350,7 +383,7 @@ func makeHTTPDialer(remoteAddr string) (func(string, string) (net.Conn, error), 
 	}
 
 	dialFn := func(proto, addr string) (net.Conn, error) {
-		return net.Dial(protocol, u.GetHostWithPath())
+		return net.Dial(protocol, u.GetDialAddress())
 	}
 
 	return dialFn, nil
@@ -369,8 +402,12 @@ func DefaultHTTPClient(remoteAddr string) (*http.Client, error) {
 	client := &http.Client{
 		Transport: &http.Transport{
 			// Set to true to prevent GZIP-bomb DoS attacks
-			DisableCompression: true,
-			Dial:               dialFn,
+			DisableCompression:    true,
+			Dial:                  dialFn,
+			MaxIdleConns:          defaultMaxIdleConns,
+			MaxIdleConnsPerHost:   defaultMaxIdleConns,
+			IdleConnTimeout:       defaultIdleConnTimeout * time.Second,
+			ExpectContinueTimeout: defaultExpectContinueTimeout * time.Second,
 		},
 	}
 

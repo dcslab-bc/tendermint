@@ -17,12 +17,12 @@ package crypto_test
 import (
 	"fmt"
 
-	"github.com/tendermint/tendermint/crypto"
+	"github.com/Finschia/ostracon/crypto"
 )
 
 func ExampleSha256() {
-	sum := crypto.Sha256([]byte("This is Tendermint"))
+	sum := crypto.Sha256([]byte("This is Ostracon"))
 	fmt.Printf("%x\n", sum)
 	// Output:
-	// f91afb642f3d1c87c17eb01aae5cb65c242dfdbe7cf1066cc260f4ce5d33b94e
+	// e4f6b8545bd63b92f12936eccde66e48cc26895e8e67297ff97cc31c833a38d4
 }

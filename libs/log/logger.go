@@ -3,10 +3,10 @@ package log
 import (
 	"io"
 
-	kitlog "github.com/go-kit/kit/log"
+	kitlog "github.com/go-kit/log"
 )
 
-// Logger is what any Tendermint library should take.
+// Logger is what any Ostracon library should take.
 type Logger interface {
 	Debug(msg string, keyvals ...interface{})
 	Info(msg string, keyvals ...interface{})

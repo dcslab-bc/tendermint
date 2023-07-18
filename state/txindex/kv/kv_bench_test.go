@@ -7,11 +7,12 @@ import (
 	"io/ioutil"
 	"testing"
 
+	abci "github.com/tendermint/tendermint/abci/types"
 	dbm "github.com/tendermint/tm-db"
 
-	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/libs/pubsub/query"
-	"github.com/tendermint/tendermint/types"
+	ocabci "github.com/Finschia/ostracon/abci/types"
+	"github.com/Finschia/ostracon/libs/pubsub/query"
+	"github.com/Finschia/ostracon/types"
 )
 
 func BenchmarkTxSearch(b *testing.B) {
@@ -49,7 +50,7 @@ func BenchmarkTxSearch(b *testing.B) {
 			Tx:     types.Tx(string(txBz)),
 			Result: abci.ResponseDeliverTx{
 				Data:   []byte{0},
-				Code:   abci.CodeTypeOK,
+				Code:   ocabci.CodeTypeOK,
 				Log:    "",
 				Events: events,
 			},

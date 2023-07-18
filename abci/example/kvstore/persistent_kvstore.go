@@ -7,13 +7,14 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tendermint/tendermint/abci/types"
+	pc "github.com/tendermint/tendermint/proto/tendermint/crypto"
 	dbm "github.com/tendermint/tm-db"
 
-	"github.com/tendermint/tendermint/abci/example/code"
-	"github.com/tendermint/tendermint/abci/types"
-	cryptoenc "github.com/tendermint/tendermint/crypto/encoding"
-	"github.com/tendermint/tendermint/libs/log"
-	pc "github.com/tendermint/tendermint/proto/tendermint/crypto"
+	"github.com/Finschia/ostracon/abci/example/code"
+	ocabci "github.com/Finschia/ostracon/abci/types"
+	cryptoenc "github.com/Finschia/ostracon/crypto/encoding"
+	"github.com/Finschia/ostracon/libs/log"
 )
 
 const (
@@ -22,7 +23,7 @@ const (
 
 //-----------------------------------------
 
-var _ types.Application = (*PersistentKVStoreApplication)(nil)
+var _ ocabci.Application = (*PersistentKVStoreApplication)(nil)
 
 type PersistentKVStoreApplication struct {
 	app *Application
@@ -80,8 +81,20 @@ func (app *PersistentKVStoreApplication) DeliverTx(req types.RequestDeliverTx) t
 	return app.app.DeliverTx(req)
 }
 
-func (app *PersistentKVStoreApplication) CheckTx(req types.RequestCheckTx) types.ResponseCheckTx {
-	return app.app.CheckTx(req)
+func (app *PersistentKVStoreApplication) CheckTxSync(req types.RequestCheckTx) ocabci.ResponseCheckTx {
+	return app.app.CheckTxSync(req)
+}
+
+func (app *PersistentKVStoreApplication) CheckTxAsync(req types.RequestCheckTx, callback ocabci.CheckTxCallback) {
+	app.app.CheckTxAsync(req, callback)
+}
+
+func (app *PersistentKVStoreApplication) BeginRecheckTx(req ocabci.RequestBeginRecheckTx) ocabci.ResponseBeginRecheckTx {
+	return app.app.BeginRecheckTx(req)
+}
+
+func (app *PersistentKVStoreApplication) EndRecheckTx(req ocabci.RequestEndRecheckTx) ocabci.ResponseEndRecheckTx {
+	return app.app.EndRecheckTx(req)
 }
 
 // Commit will panic if InitChain was not called
@@ -120,7 +133,7 @@ func (app *PersistentKVStoreApplication) InitChain(req types.RequestInitChain) t
 }
 
 // Track the block hash and header information
-func (app *PersistentKVStoreApplication) BeginBlock(req types.RequestBeginBlock) types.ResponseBeginBlock {
+func (app *PersistentKVStoreApplication) BeginBlock(req ocabci.RequestBeginBlock) types.ResponseBeginBlock {
 	// reset valset changes
 	app.ValUpdates = make([]types.ValidatorUpdate, 0)
 
@@ -181,7 +194,7 @@ func (app *PersistentKVStoreApplication) Validators() (validators []types.Valida
 	for ; itr.Valid(); itr.Next() {
 		if isValidatorTx(itr.Key()) {
 			validator := new(types.ValidatorUpdate)
-			err := types.ReadMessage(bytes.NewBuffer(itr.Value()), validator)
+			err := ocabci.ReadMessage(bytes.NewBuffer(itr.Value()), validator)
 			if err != nil {
 				panic(err)
 			}
@@ -195,12 +208,17 @@ func (app *PersistentKVStoreApplication) Validators() (validators []types.Valida
 }
 
 func MakeValSetChangeTx(pubkey pc.PublicKey, power int64) []byte {
-	pk, err := cryptoenc.PubKeyFromProto(pubkey)
+	_, tx := MakeValSetChangeTxAndMore(pubkey, power)
+	return []byte(tx)
+}
+
+func MakeValSetChangeTxAndMore(pubkey pc.PublicKey, power int64) (string, string) {
+	pkBytes, err := pubkey.Marshal()
 	if err != nil {
 		panic(err)
 	}
-	pubStr := base64.StdEncoding.EncodeToString(pk.Bytes())
-	return []byte(fmt.Sprintf("val:%s!%d", pubStr, power))
+	pubStr := base64.StdEncoding.EncodeToString(pkBytes)
+	return pubStr, fmt.Sprintf("val:%s!%d", pubStr, power)
 }
 
 func isValidatorTx(tx []byte) bool {
@@ -208,11 +226,12 @@ func isValidatorTx(tx []byte) bool {
 }
 
 // format is "val:pubkey!power"
-// pubkey is a base64-encoded 32-byte ed25519 key
+// pubkey is a base64-encoded proto.ostracon.crypto.PublicKey bytes
+// See MakeValSetChangeTx
 func (app *PersistentKVStoreApplication) execValidatorTx(tx []byte) types.ResponseDeliverTx {
 	tx = tx[len(ValidatorSetChangePrefix):]
 
-	//  get the pubkey and power
+	// get the pubkey and power
 	pubKeyAndPower := strings.Split(string(tx), "!")
 	if len(pubKeyAndPower) != 2 {
 		return types.ResponseDeliverTx{
@@ -222,11 +241,24 @@ func (app *PersistentKVStoreApplication) execValidatorTx(tx []byte) types.Respon
 	pubkeyS, powerS := pubKeyAndPower[0], pubKeyAndPower[1]
 
 	// decode the pubkey
-	pubkey, err := base64.StdEncoding.DecodeString(pubkeyS)
+	pkBytes, err := base64.StdEncoding.DecodeString(pubkeyS)
 	if err != nil {
 		return types.ResponseDeliverTx{
 			Code: code.CodeTypeEncodingError,
-			Log:  fmt.Sprintf("Pubkey (%s) is invalid base64", pubkeyS)}
+			Log:  fmt.Sprintf("pubkeyS (%s) is invalid base64", pubkeyS)}
+	}
+	var pkProto pc.PublicKey
+	err = pkProto.Unmarshal(pkBytes)
+	if err != nil {
+		return types.ResponseDeliverTx{
+			Code: code.CodeTypeEncodingError,
+			Log:  fmt.Sprintf("pkBytes (%x) is invalid binary", pkBytes)}
+	}
+	pubkey, err := cryptoenc.PubKeyFromProto(&pkProto)
+	if err != nil {
+		return types.ResponseDeliverTx{
+			Code: code.CodeTypeEncodingError,
+			Log:  fmt.Sprintf("pkProto (%s) is invalid binary", pkProto)}
 	}
 
 	// decode the power
@@ -238,16 +270,20 @@ func (app *PersistentKVStoreApplication) execValidatorTx(tx []byte) types.Respon
 	}
 
 	// update
-	return app.updateValidator(types.UpdateValidator(pubkey, power, ""))
+	return app.updateValidator(ocabci.NewValidatorUpdate(pubkey, power))
 }
 
 // add, update, or remove a validator
+// See MakeValSetChangeTx
 func (app *PersistentKVStoreApplication) updateValidator(v types.ValidatorUpdate) types.ResponseDeliverTx {
-	pubkey, err := cryptoenc.PubKeyFromProto(v.PubKey)
+	pubkey, err := cryptoenc.PubKeyFromProto(&v.PubKey)
 	if err != nil {
-		panic(fmt.Errorf("can't decode public key: %w", err))
+		return types.ResponseDeliverTx{
+			Code: code.CodeTypeEncodingError,
+			Log:  fmt.Sprintf("Error encoding Public Key: %s", err)}
 	}
-	key := []byte("val:" + string(pubkey.Bytes()))
+	pubStr, _ := MakeValSetChangeTxAndMore(v.PubKey, v.Power)
+	key := []byte("val:" + pubStr)
 
 	if v.Power == 0 {
 		// remove validator
@@ -256,7 +292,6 @@ func (app *PersistentKVStoreApplication) updateValidator(v types.ValidatorUpdate
 			panic(err)
 		}
 		if !hasKey {
-			pubStr := base64.StdEncoding.EncodeToString(pubkey.Bytes())
 			return types.ResponseDeliverTx{
 				Code: code.CodeTypeUnauthorized,
 				Log:  fmt.Sprintf("Cannot remove non-existent validator %s", pubStr)}

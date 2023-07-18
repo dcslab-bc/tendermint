@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tendermint/tendermint/libs/bits"
-	tmjson "github.com/tendermint/tendermint/libs/json"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
+
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/libs/bits"
+	tmjson "github.com/Finschia/ostracon/libs/json"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
 )
 
 const (
@@ -95,6 +97,16 @@ func NewVoteSet(chainID string, height int64, round int32,
 	}
 }
 
+// used only test
+func (voteSet *VoteSet) GetSum() int64 {
+	if voteSet == nil {
+		return 0
+	}
+	voteSet.mtx.Lock()
+	defer voteSet.mtx.Unlock()
+	return voteSet.sum
+}
+
 func (voteSet *VoteSet) ChainID() string {
 	return voteSet.chainID
 }
@@ -147,11 +159,12 @@ func (voteSet *VoteSet) AddVote(vote *Vote) (added bool, err error) {
 	voteSet.mtx.Lock()
 	defer voteSet.mtx.Unlock()
 
-	return voteSet.addVote(vote)
+	return voteSet.addVote(vote, vote.Verify)
 }
 
 // NOTE: Validates as much as possible before attempting to verify the signature.
-func (voteSet *VoteSet) addVote(vote *Vote) (added bool, err error) {
+func (voteSet *VoteSet) addVote(vote *Vote, execVoteVerify func(chainID string,
+	pub crypto.PubKey) (err error)) (added bool, err error) {
 	if vote == nil {
 		return false, ErrVoteNil
 	}
@@ -200,8 +213,13 @@ func (voteSet *VoteSet) addVote(vote *Vote) (added bool, err error) {
 	}
 
 	// Check signature.
-	if err := vote.Verify(voteSet.chainID, val.PubKey); err != nil {
-		return false, fmt.Errorf("failed to verify vote with ChainID %s and PubKey %s: %w", voteSet.chainID, val.PubKey, err)
+	if err := execVoteVerify(voteSet.chainID, val.PubKey); err != nil {
+		return false, fmt.Errorf(
+			"failed to verify vote with ChainID %s and PubKey %s: %w",
+			voteSet.chainID,
+			val.PubKey,
+			err,
+		)
 	}
 
 	// Add vote and get conflicting vote if any.
@@ -375,6 +393,20 @@ func (voteSet *VoteSet) GetByIndex(valIndex int32) *Vote {
 	return voteSet.votes[valIndex]
 }
 
+// List returns a copy of the list of votes stored by the VoteSet.
+func (voteSet *VoteSet) List() []Vote {
+	if voteSet == nil || voteSet.votes == nil {
+		return nil
+	}
+	votes := make([]Vote, 0, len(voteSet.votes))
+	for i := range voteSet.votes {
+		if voteSet.votes[i] != nil {
+			votes = append(votes, *voteSet.votes[i])
+		}
+	}
+	return votes
+}
+
 func (voteSet *VoteSet) GetByAddress(address []byte) *Vote {
 	if voteSet == nil {
 		return nil
@@ -420,6 +452,9 @@ func (voteSet *VoteSet) HasTwoThirdsAny() bool {
 }
 
 func (voteSet *VoteSet) HasAll() bool {
+	if voteSet == nil {
+		return false
+	}
 	voteSet.mtx.Lock()
 	defer voteSet.mtx.Unlock()
 	return voteSet.sum == voteSet.valSet.TotalVotingPower()
@@ -442,12 +477,14 @@ func (voteSet *VoteSet) TwoThirdsMajority() (blockID BlockID, ok bool) {
 //--------------------------------------------------------------------------------
 // Strings and JSON
 
+const nilVoteSetString = "nil-VoteSet"
+
 // String returns a string representation of VoteSet.
 //
 // See StringIndented.
 func (voteSet *VoteSet) String() string {
 	if voteSet == nil {
-		return "nil-VoteSet"
+		return nilVoteSetString
 	}
 	return voteSet.StringIndented("")
 }
@@ -551,13 +588,26 @@ func (voteSet *VoteSet) voteStrings() []string {
 // 7. 2/3+ majority for each peer
 func (voteSet *VoteSet) StringShort() string {
 	if voteSet == nil {
-		return "nil-VoteSet"
+		return nilVoteSetString
 	}
 	voteSet.mtx.Lock()
 	defer voteSet.mtx.Unlock()
 	_, _, frac := voteSet.sumTotalFrac()
 	return fmt.Sprintf(`VoteSet{H:%v R:%v T:%v +2/3:%v(%v) %v %v}`,
 		voteSet.height, voteSet.round, voteSet.signedMsgType, voteSet.maj23, frac, voteSet.votesBitArray, voteSet.peerMaj23s)
+}
+
+// LogString produces a logging suitable string representation of the
+// vote set.
+func (voteSet *VoteSet) LogString() string {
+	if voteSet == nil {
+		return nilVoteSetString
+	}
+	voteSet.mtx.Lock()
+	defer voteSet.mtx.Unlock()
+	voted, total, frac := voteSet.sumTotalFrac()
+
+	return fmt.Sprintf("Votes:%d/%d(%.3f)", voted, total, frac)
 }
 
 // return the power voted, the total, and the fraction
@@ -597,8 +647,9 @@ func (voteSet *VoteSet) MakeCommit() *Commit {
 		}
 		commitSigs[i] = commitSig
 	}
+	newCommit := NewCommit(voteSet.GetHeight(), voteSet.GetRound(), *voteSet.maj23, commitSigs)
 
-	return NewCommit(voteSet.GetHeight(), voteSet.GetRound(), *voteSet.maj23, commitSigs)
+	return newCommit
 }
 
 //--------------------------------------------------------------------------------

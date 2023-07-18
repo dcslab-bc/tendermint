@@ -8,22 +8,25 @@ import (
 	"time"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/libs/log"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
-	"github.com/tendermint/tendermint/p2p"
 	ssproto "github.com/tendermint/tendermint/proto/tendermint/statesync"
-	"github.com/tendermint/tendermint/proxy"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/types"
+
+	"github.com/Finschia/ostracon/config"
+	"github.com/Finschia/ostracon/libs/log"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
+	"github.com/Finschia/ostracon/light"
+	"github.com/Finschia/ostracon/p2p"
+	"github.com/Finschia/ostracon/proxy"
+	sm "github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/types"
 )
 
 const (
-	// chunkFetchers is the number of concurrent chunk fetchers to run.
-	chunkFetchers = 4
 	// chunkTimeout is the timeout while waiting for the next chunk from the chunk queue.
 	chunkTimeout = 2 * time.Minute
-	// requestTimeout is the timeout before rerequesting a chunk, possibly from a different peer.
-	chunkRequestTimeout = 10 * time.Second
+
+	// minimumDiscoveryTime is the lowest allowable time for a
+	// SyncAny discovery time.
+	minimumDiscoveryTime = 5 * time.Second
 )
 
 var (
@@ -55,21 +58,32 @@ type syncer struct {
 	connQuery     proxy.AppConnQuery
 	snapshots     *snapshotPool
 	tempDir       string
+	chunkFetchers int32
+	retryTimeout  time.Duration
 
 	mtx    tmsync.RWMutex
 	chunks *chunkQueue
 }
 
 // newSyncer creates a new syncer.
-func newSyncer(logger log.Logger, conn proxy.AppConnSnapshot, connQuery proxy.AppConnQuery,
-	stateProvider StateProvider, tempDir string) *syncer {
+func newSyncer(
+	cfg config.StateSyncConfig,
+	logger log.Logger,
+	conn proxy.AppConnSnapshot,
+	connQuery proxy.AppConnQuery,
+	stateProvider StateProvider,
+	tempDir string,
+) *syncer {
+
 	return &syncer{
 		logger:        logger,
 		stateProvider: stateProvider,
 		conn:          conn,
 		connQuery:     connQuery,
-		snapshots:     newSnapshotPool(stateProvider),
+		snapshots:     newSnapshotPool(),
 		tempDir:       tempDir,
+		chunkFetchers: cfg.ChunkFetchers,
+		retryTimeout:  cfg.ChunkRequestTimeout,
 	}
 }
 
@@ -123,9 +137,13 @@ func (s *syncer) RemovePeer(peer p2p.Peer) {
 }
 
 // SyncAny tries to sync any of the snapshots in the snapshot pool, waiting to discover further
-// snapshots if none were found and discoveryTime > 0. It returns the latest state and block commit
+// snapshots if none were found and discoveryTime > 0. It returns the latest state, previous state and block commit
 // which the caller must use to bootstrap the node.
-func (s *syncer) SyncAny(discoveryTime time.Duration) (sm.State, *types.Commit, error) {
+func (s *syncer) SyncAny(discoveryTime time.Duration, retryHook func()) (sm.State, sm.State, *types.Commit, error) {
+	if discoveryTime != 0 && discoveryTime < minimumDiscoveryTime {
+		discoveryTime = 5 * minimumDiscoveryTime
+	}
+
 	if discoveryTime > 0 {
 		s.logger.Info(fmt.Sprintf("Discovering snapshots for %v", discoveryTime))
 		time.Sleep(discoveryTime)
@@ -146,8 +164,9 @@ func (s *syncer) SyncAny(discoveryTime time.Duration) (sm.State, *types.Commit, 
 		}
 		if snapshot == nil {
 			if discoveryTime == 0 {
-				return sm.State{}, nil, errNoSnapshots
+				return sm.State{}, sm.State{}, nil, errNoSnapshots
 			}
+			retryHook()
 			s.logger.Info(fmt.Sprintf("Discovering snapshots for %v", discoveryTime))
 			time.Sleep(discoveryTime)
 			continue
@@ -155,18 +174,18 @@ func (s *syncer) SyncAny(discoveryTime time.Duration) (sm.State, *types.Commit, 
 		if chunks == nil {
 			chunks, err = newChunkQueue(snapshot, s.tempDir)
 			if err != nil {
-				return sm.State{}, nil, fmt.Errorf("failed to create chunk queue: %w", err)
+				return sm.State{}, sm.State{}, nil, fmt.Errorf("failed to create chunk queue: %w", err)
 			}
 			defer chunks.Close() // in case we forget to close it elsewhere
 		}
 
-		newState, commit, err := s.Sync(snapshot, chunks)
+		newState, previousState, commit, err := s.Sync(snapshot, chunks)
 		switch {
 		case err == nil:
-			return newState, commit, nil
+			return newState, previousState, commit, nil
 
 		case errors.Is(err, errAbort):
-			return sm.State{}, nil, err
+			return sm.State{}, sm.State{}, nil, err
 
 		case errors.Is(err, errRetrySnapshot):
 			chunks.RetryAll()
@@ -196,8 +215,12 @@ func (s *syncer) SyncAny(discoveryTime time.Duration) (sm.State, *types.Commit, 
 				s.logger.Info("Snapshot sender rejected", "peer", peer.ID())
 			}
 
+		case errors.Is(err, context.DeadlineExceeded):
+			s.logger.Info("Timed out validating snapshot, rejecting", "height", snapshot.Height, "err", err)
+			s.snapshots.Reject(snapshot)
+
 		default:
-			return sm.State{}, nil, fmt.Errorf("snapshot restoration failed: %w", err)
+			return sm.State{}, sm.State{}, nil, fmt.Errorf("snapshot restoration failed: %w", err)
 		}
 
 		// Discard snapshot and chunks for next iteration
@@ -210,13 +233,13 @@ func (s *syncer) SyncAny(discoveryTime time.Duration) (sm.State, *types.Commit, 
 	}
 }
 
-// Sync executes a sync for a specific snapshot, returning the latest state and block commit which
+// Sync executes a sync for a specific snapshot, returning the latest state, previous state and block commit which
 // the caller must use to bootstrap the node.
-func (s *syncer) Sync(snapshot *snapshot, chunks *chunkQueue) (sm.State, *types.Commit, error) {
+func (s *syncer) Sync(snapshot *snapshot, chunks *chunkQueue) (sm.State, sm.State, *types.Commit, error) {
 	s.mtx.Lock()
 	if s.chunks != nil {
 		s.mtx.Unlock()
-		return sm.State{}, nil, errors.New("a state sync is already in progress")
+		return sm.State{}, sm.State{}, nil, errors.New("a state sync is already in progress")
 	}
 	s.chunks = chunks
 	s.mtx.Unlock()
@@ -226,50 +249,82 @@ func (s *syncer) Sync(snapshot *snapshot, chunks *chunkQueue) (sm.State, *types.
 		s.mtx.Unlock()
 	}()
 
-	// Offer snapshot to ABCI app.
-	err := s.offerSnapshot(snapshot)
+	hctx, cancel := context.WithTimeout(context.TODO(), 30*time.Second)
+	defer cancel()
+
+	appHash, err := s.stateProvider.AppHash(hctx, snapshot.Height)
 	if err != nil {
-		return sm.State{}, nil, err
+		s.logger.Info("failed to fetch and verify app hash", "err", err)
+		if err == light.ErrNoWitnesses {
+			return sm.State{}, sm.State{}, nil, err
+		}
+		return sm.State{}, sm.State{}, nil, errRejectSnapshot
+	}
+	snapshot.trustedAppHash = appHash
+
+	// Offer snapshot to ABCI app.
+	err = s.offerSnapshot(snapshot)
+	if err != nil {
+		return sm.State{}, sm.State{}, nil, err
 	}
 
 	// Spawn chunk fetchers. They will terminate when the chunk queue is closed or context cancelled.
-	ctx, cancel := context.WithCancel(context.Background())
+	fetchCtx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
-	for i := int32(0); i < chunkFetchers; i++ {
-		go s.fetchChunks(ctx, snapshot, chunks)
+	for i := int32(0); i < s.chunkFetchers; i++ {
+		go s.fetchChunks(fetchCtx, snapshot, chunks)
 	}
 
-	pctx, pcancel := context.WithTimeout(context.Background(), 10*time.Second)
+	pctx, pcancel := context.WithTimeout(context.TODO(), 30*time.Second)
 	defer pcancel()
 
 	// Optimistically build new state, so we don't discover any light client failures at the end.
 	state, err := s.stateProvider.State(pctx, snapshot.Height)
 	if err != nil {
-		return sm.State{}, nil, fmt.Errorf("failed to build new state: %w", err)
+		s.logger.Info("failed to fetch and verify ostracon state", "err", err)
+		if err == light.ErrNoWitnesses {
+			return sm.State{}, sm.State{}, nil, err
+		}
+		return sm.State{}, sm.State{}, nil, errRejectSnapshot
+	}
+	var previousState sm.State
+	if snapshot.Height-1 < 1 {
+		previousState = sm.State{}
+	} else {
+		previousState, err = s.stateProvider.State(pctx, snapshot.Height-1)
+		if err != nil {
+			s.logger.Info("failed to fetch and verify ostracon previous state", "err", err)
+			if err == light.ErrNoWitnesses {
+				return sm.State{}, sm.State{}, nil, err
+			}
+			return sm.State{}, sm.State{}, nil, errRejectSnapshot
+		}
 	}
 	commit, err := s.stateProvider.Commit(pctx, snapshot.Height)
 	if err != nil {
-		return sm.State{}, nil, fmt.Errorf("failed to fetch commit: %w", err)
+		s.logger.Info("failed to fetch and verify commit", "err", err)
+		if err == light.ErrNoWitnesses {
+			return sm.State{}, sm.State{}, nil, err
+		}
+		return sm.State{}, sm.State{}, nil, errRejectSnapshot
 	}
 
 	// Restore snapshot
 	err = s.applyChunks(chunks)
 	if err != nil {
-		return sm.State{}, nil, err
+		return sm.State{}, sm.State{}, nil, err
 	}
 
-	// Verify app and update app version
-	appVersion, err := s.verifyApp(snapshot)
-	if err != nil {
-		return sm.State{}, nil, err
+	// Verify app and app version
+	if err := s.verifyApp(snapshot, state.Version.Consensus.App); err != nil {
+		return sm.State{}, sm.State{}, nil, err
 	}
-	state.Version.Consensus.App = appVersion
 
 	// Done! 🎉
 	s.logger.Info("Snapshot restored", "height", snapshot.Height, "format", snapshot.Format,
 		"hash", snapshot.Hash)
 
-	return state, commit, nil
+	return state, previousState, commit, nil
 }
 
 // offerSnapshot offers a snapshot to the app. It returns various errors depending on the app's
@@ -368,36 +423,50 @@ func (s *syncer) applyChunks(chunks *chunkQueue) error {
 // fetchChunks requests chunks from peers, receiving allocations from the chunk queue. Chunks
 // will be received from the reactor via syncer.AddChunks() to chunkQueue.Add().
 func (s *syncer) fetchChunks(ctx context.Context, snapshot *snapshot, chunks *chunkQueue) {
+	var (
+		next  = true
+		index uint32
+		err   error
+	)
+
 	for {
-		index, err := chunks.Allocate()
-		if err == errDone {
-			// Keep checking until the context is cancelled (restore is done), in case any
-			// chunks need to be refetched.
-			select {
-			case <-ctx.Done():
-				return
-			default:
+		if next {
+			index, err = chunks.Allocate()
+			if errors.Is(err, errDone) {
+				// Keep checking until the context is canceled (restore is done), in case any
+				// chunks need to be refetched.
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				time.Sleep(2 * time.Second)
+				continue
 			}
-			time.Sleep(2 * time.Second)
-			continue
-		}
-		if err != nil {
-			s.logger.Error("Failed to allocate chunk from queue", "err", err)
-			return
+			if err != nil {
+				s.logger.Error("Failed to allocate chunk from queue", "err", err)
+				return
+			}
 		}
 		s.logger.Info("Fetching snapshot chunk", "height", snapshot.Height,
 			"format", snapshot.Format, "chunk", index, "total", chunks.Size())
 
-		ticker := time.NewTicker(chunkRequestTimeout)
+		ticker := time.NewTicker(s.retryTimeout)
 		defer ticker.Stop()
+
 		s.requestChunk(snapshot, index)
+
 		select {
 		case <-chunks.WaitFor(index):
+			next = true
+
 		case <-ticker.C:
-			s.requestChunk(snapshot, index)
+			next = false
+
 		case <-ctx.Done():
 			return
 		}
+
 		ticker.Stop()
 	}
 }
@@ -419,25 +488,38 @@ func (s *syncer) requestChunk(snapshot *snapshot, chunk uint32) {
 	}))
 }
 
-// verifyApp verifies the sync, checking the app hash and last block height. It returns the
-// app version, which should be returned as part of the initial state.
-func (s *syncer) verifyApp(snapshot *snapshot) (uint64, error) {
+// verifyApp verifies the sync, checking the app hash, last block height and app version
+func (s *syncer) verifyApp(snapshot *snapshot, appVersion uint64) error {
+	// XXX Is it okay to check with "ABCI.Info" only
+	// since AppVersion will be updated by "ABCI.InitChain" and "ABCI.EndBlock"?
 	resp, err := s.connQuery.InfoSync(proxy.RequestInfo)
 	if err != nil {
-		return 0, fmt.Errorf("failed to query ABCI app for appHash: %w", err)
+		return fmt.Errorf("failed to query ABCI app for appHash: %w", err)
+	}
+
+	// sanity check that the app version in the block matches the application's own record
+	// of its version
+	if resp.AppVersion != appVersion {
+		// An error here most likely means that the app hasn't implemented state sync
+		// or the Info call correctly
+		return fmt.Errorf("app version mismatch. Expected: %d, got: %d",
+			appVersion, resp.AppVersion)
 	}
 	if !bytes.Equal(snapshot.trustedAppHash, resp.LastBlockAppHash) {
 		s.logger.Error("appHash verification failed",
 			"expected", snapshot.trustedAppHash,
 			"actual", resp.LastBlockAppHash)
-		return 0, errVerifyFailed
+		return errVerifyFailed
 	}
 	if uint64(resp.LastBlockHeight) != snapshot.Height {
-		s.logger.Error("ABCI app reported unexpected last block height",
-			"expected", snapshot.Height, "actual", resp.LastBlockHeight)
-		return 0, errVerifyFailed
+		s.logger.Error(
+			"ABCI app reported unexpected last block height",
+			"expected", snapshot.Height,
+			"actual", resp.LastBlockHeight,
+		)
+		return errVerifyFailed
 	}
 
 	s.logger.Info("Verified ABCI app", "height", snapshot.Height, "appHash", snapshot.trustedAppHash)
-	return resp.AppVersion, nil
+	return nil
 }

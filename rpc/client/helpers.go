@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/types"
 )
 
 // Waiter is informed of current height, decided whether to quit early
@@ -57,7 +57,7 @@ func WaitForHeight(c StatusClient, h int64, waiter Waiter) error {
 // when the timeout duration has expired.
 //
 // This handles subscribing and unsubscribing under the hood
-func WaitForOneEvent(c EventsClient, evtTyp string, timeout time.Duration) (types.TMEventData, error) {
+func WaitForOneEvent(c EventsClient, evtTyp string, timeout time.Duration) (types.OCEventData, error) {
 	const subscriber = "helpers"
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -76,7 +76,7 @@ func WaitForOneEvent(c EventsClient, evtTyp string, timeout time.Duration) (type
 
 	select {
 	case event := <-eventCh:
-		return event.Data.(types.TMEventData), nil
+		return event.Data, nil
 	case <-ctx.Done():
 		return nil, errors.New("timed out waiting for event")
 	}

@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/crypto/secp256k1"
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/crypto/secp256k1"
 
 	underlyingSecp256k1 "github.com/btcsuite/btcd/btcec"
 )
@@ -36,7 +36,7 @@ func TestPubKeySecp256k1Address(t *testing.T) {
 		addrBbz, _, _ := base58.CheckDecode(d.addr)
 		addrB := crypto.Address(addrBbz)
 
-		var priv secp256k1.PrivKey = secp256k1.PrivKey(privB)
+		priv := secp256k1.PrivKey(privB)
 
 		pubKey := priv.PubKey()
 		pubT, _ := pubKey.(secp256k1.PubKey)

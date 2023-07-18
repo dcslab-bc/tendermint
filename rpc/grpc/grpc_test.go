@@ -7,20 +7,20 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/abci/example/kvstore"
-	core_grpc "github.com/tendermint/tendermint/rpc/grpc"
-	rpctest "github.com/tendermint/tendermint/rpc/test"
+	"github.com/Finschia/ostracon/abci/example/kvstore"
+	core_grpc "github.com/Finschia/ostracon/rpc/grpc"
+	rpctest "github.com/Finschia/ostracon/rpc/test"
 )
 
 func TestMain(m *testing.M) {
-	// start a tendermint node in the background to test against
+	// start an ostracon node in the background to test against
 	app := kvstore.NewApplication()
-	node := rpctest.StartTendermint(app)
+	node := rpctest.StartOstracon(app)
 
 	code := m.Run()
 
 	// and shut down proper at the end
-	rpctest.StopTendermint(node)
+	rpctest.StopOstracon(node)
 	os.Exit(code)
 }
 
