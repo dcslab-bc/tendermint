@@ -2,10 +2,10 @@ package client
 
 /*
 The client package provides a general purpose interface (Client) for connecting
-to a tendermint node, as well as higher-level functionality.
+to an ostracon node, as well as higher-level functionality.
 
 The main implementation for production code is client.HTTP, which
-connects via http to the jsonrpc interface of the tendermint node.
+connects via http to the jsonrpc interface of the ostracon node.
 
 For connecting to a node running in the same process (eg. when
 compiling the abci app in the same process), you can use the client.Local
@@ -23,14 +23,15 @@ implementation.
 import (
 	"context"
 
-	"github.com/tendermint/tendermint/libs/bytes"
-	"github.com/tendermint/tendermint/libs/service"
-	ctypes "github.com/tendermint/tendermint/rpc/core/types"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/libs/bytes"
+	"github.com/Finschia/ostracon/libs/service"
+	ctypes "github.com/Finschia/ostracon/rpc/core/types"
+	"github.com/Finschia/ostracon/types"
 )
 
 // Client wraps most important rpc calls a client would make if you want to
 // listen for events, test if it also implements events.EventSwitch.
+//go:generate mockery --case underscore --name Client
 type Client interface {
 	service.Service
 	ABCIClient
@@ -114,7 +115,7 @@ type NetworkClient interface {
 }
 
 // EventsClient is reactive, you can subscribe to any message, given the proper
-// string. see tendermint/types/events.go
+// string. see ostracon/types/events.go
 type EventsClient interface {
 	// Subscribe subscribes given subscriber to query. Returns a channel with
 	// cap=1 onto which events are published. An error is returned if it fails to
@@ -144,6 +145,7 @@ type EvidenceClient interface {
 }
 
 // RemoteClient is a Client, which can also return the remote network address.
+//go:generate mockery --case underscore --name RemoteClient
 type RemoteClient interface {
 	Client
 

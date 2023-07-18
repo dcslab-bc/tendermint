@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tendermint/tendermint/crypto/tmhash"
-	tmtime "github.com/tendermint/tendermint/types/time"
+	"github.com/Finschia/ostracon/crypto/tmhash"
+	"github.com/Finschia/ostracon/crypto/vrf"
+	tmtime "github.com/Finschia/ostracon/types/time"
 )
 
 // ValidateTime does a basic time validation ensuring time does not drift too
@@ -33,6 +34,18 @@ func ValidateHash(h []byte) error {
 	if len(h) > 0 && len(h) != tmhash.Size {
 		return fmt.Errorf("expected size to be %d bytes, got %d bytes",
 			tmhash.Size,
+			len(h),
+		)
+	}
+	return nil
+}
+
+// ValidateProof returns an error if the proof is not empty, but its
+// size != vrf.ProofSize.
+func ValidateProof(h []byte) error {
+	if len(h) > 0 && len(h) != vrf.ProofSize {
+		return fmt.Errorf("expected size to be %d bytes, got %d bytes",
+			vrf.ProofSize,
 			len(h),
 		)
 	}

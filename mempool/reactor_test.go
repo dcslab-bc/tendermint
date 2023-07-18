@@ -13,16 +13,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/abci/example/kvstore"
 	abci "github.com/tendermint/tendermint/abci/types"
-	cfg "github.com/tendermint/tendermint/config"
-	"github.com/tendermint/tendermint/libs/log"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
-	"github.com/tendermint/tendermint/p2p"
-	"github.com/tendermint/tendermint/p2p/mock"
 	memproto "github.com/tendermint/tendermint/proto/tendermint/mempool"
-	"github.com/tendermint/tendermint/proxy"
-	"github.com/tendermint/tendermint/types"
+
+	"github.com/Finschia/ostracon/abci/example/kvstore"
+	cfg "github.com/Finschia/ostracon/config"
+	"github.com/Finschia/ostracon/libs/log"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
+	"github.com/Finschia/ostracon/p2p"
+	"github.com/Finschia/ostracon/p2p/mock"
+	"github.com/Finschia/ostracon/proxy"
+	"github.com/Finschia/ostracon/types"
 )
 
 const (
@@ -47,6 +48,11 @@ func TestReactorBroadcastTxsMessage(t *testing.T) {
 	// replace Connect2Switches (full mesh) with a func, which connects first
 	// reactor to others and nothing else, this test should also pass with >2 reactors.
 	const N = 2
+
+	// In this test, a reactor receives 1000 tx message from a peer.
+	// A reactor has N peer, so up to (N-1)×1000 txs can be stacked
+	config.P2P.MempoolRecvBufSize = (N - 1) * 1000
+
 	reactors := makeAndConnectReactors(config, N)
 	defer func() {
 		for _, r := range reactors {
@@ -102,7 +108,7 @@ func TestReactorConcurrency(t *testing.T) {
 			for i := range txs {
 				deliverTxResponses[i] = &abci.ResponseDeliverTx{Code: 0}
 			}
-			err := reactors[0].mempool.Update(1, txs, deliverTxResponses, nil, nil)
+			err := reactors[0].mempool.Update(newTestBlock(1, txs), deliverTxResponses, nil, nil)
 			assert.NoError(t, err)
 		}()
 
@@ -114,7 +120,8 @@ func TestReactorConcurrency(t *testing.T) {
 
 			reactors[1].mempool.Lock()
 			defer reactors[1].mempool.Unlock()
-			err := reactors[1].mempool.Update(1, []types.Tx{}, make([]*abci.ResponseDeliverTx, 0), nil, nil)
+			err := reactors[1].mempool.Update(newTestBlock(1, []types.Tx{}),
+				make([]*abci.ResponseDeliverTx, 0), nil, nil)
 			assert.NoError(t, err)
 		}()
 
@@ -170,7 +177,7 @@ func TestReactor_MaxTxBytes(t *testing.T) {
 	// Broadcast a tx, which has the max size
 	// => ensure it's received by the second reactor.
 	tx1 := tmrand.Bytes(config.Mempool.MaxTxBytes)
-	err := reactors[0].mempool.CheckTx(tx1, nil, TxInfo{SenderID: UnknownPeerID})
+	_, err := reactors[0].mempool.CheckTxSync(tx1, TxInfo{SenderID: UnknownPeerID})
 	require.NoError(t, err)
 	waitForTxsOnReactors(t, []types.Tx{tx1}, reactors)
 
@@ -180,7 +187,7 @@ func TestReactor_MaxTxBytes(t *testing.T) {
 	// Broadcast a tx, which is beyond the max size
 	// => ensure it's not sent
 	tx2 := tmrand.Bytes(config.Mempool.MaxTxBytes + 1)
-	err = reactors[0].mempool.CheckTx(tx2, nil, TxInfo{SenderID: UnknownPeerID})
+	_, err = reactors[0].mempool.CheckTxSync(tx2, TxInfo{SenderID: UnknownPeerID})
 	require.Error(t, err)
 }
 
@@ -306,11 +313,12 @@ func makeAndConnectReactors(config *cfg.Config, n int) []*Reactor {
 		mempool, cleanup := newMempoolWithApp(cc)
 		defer cleanup()
 
-		reactors[i] = NewReactor(config.Mempool, mempool) // so we dont start the consensus states
+		// so we dont start the consensus states
+		reactors[i] = NewReactor(config.Mempool, config.P2P.RecvAsync, config.P2P.MempoolRecvBufSize, mempool)
 		reactors[i].SetLogger(logger.With("validator", i))
 	}
 
-	p2p.MakeConnectedSwitches(config.P2P, n, func(i int, s *p2p.Switch) *p2p.Switch {
+	p2p.MakeConnectedSwitches(config.P2P, n, func(i int, s *p2p.Switch, config *cfg.P2PConfig) *p2p.Switch {
 		s.AddReactor("MEMPOOL", reactors[i])
 		return s
 
@@ -346,7 +354,7 @@ func waitForTxsOnReactors(t *testing.T, txs types.Txs, reactors []*Reactor) {
 func waitForTxsOnReactor(t *testing.T, txs types.Txs, reactor *Reactor, reactorIndex int) {
 	mempool := reactor.mempool
 	for mempool.Size() < len(txs) {
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 1000)
 	}
 
 	reapedTxs := mempool.ReapMaxTxs(len(txs))

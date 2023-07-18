@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/tendermint/tendermint/crypto"
+	"github.com/Finschia/ostracon/crypto"
 
 	schnorrkel "github.com/ChainSafe/go-schnorrkel"
 )
@@ -42,6 +42,11 @@ func (privKey PrivKey) Sign(msg []byte) ([]byte, error) {
 	return sigBytes[:], nil
 }
 
+// VRFProve is not supported in Sr25519.
+func (privKey PrivKey) VRFProve(seed []byte) (crypto.Proof, error) {
+	return nil, fmt.Errorf("VRF prove is not supported by the sr25519")
+}
+
 // PubKey gets the corresponding public key from the private key.
 func (privKey PrivKey) PubKey() crypto.PubKey {
 	var p [PrivKeySize]byte
@@ -75,7 +80,7 @@ func (privKey PrivKey) Type() string {
 
 // GenPrivKey generates a new sr25519 private key.
 // It uses OS randomness in conjunction with the current global random seed
-// in tendermint/libs/common to generate the private key.
+// in libs/common to generate the private key.
 func GenPrivKey() PrivKey {
 	return genPrivKey(crypto.CReader())
 }

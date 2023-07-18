@@ -6,13 +6,14 @@ import (
 	"math"
 	"time"
 
-	cfg "github.com/tendermint/tendermint/config"
-	"github.com/tendermint/tendermint/libs/clist"
-	"github.com/tendermint/tendermint/libs/log"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
-	"github.com/tendermint/tendermint/p2p"
 	protomem "github.com/tendermint/tendermint/proto/tendermint/mempool"
-	"github.com/tendermint/tendermint/types"
+
+	cfg "github.com/Finschia/ostracon/config"
+	"github.com/Finschia/ostracon/libs/clist"
+	"github.com/Finschia/ostracon/libs/log"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
+	"github.com/Finschia/ostracon/p2p"
+	"github.com/Finschia/ostracon/types"
 )
 
 const (
@@ -101,13 +102,13 @@ func newMempoolIDs() *mempoolIDs {
 }
 
 // NewReactor returns a new Reactor with the given config and mempool.
-func NewReactor(config *cfg.MempoolConfig, mempool *CListMempool) *Reactor {
+func NewReactor(config *cfg.MempoolConfig, async bool, recvBufSize int, mempool *CListMempool) *Reactor {
 	memR := &Reactor{
 		config:  config,
 		mempool: mempool,
 		ids:     newMempoolIDs(),
 	}
-	memR.BaseReactor = *p2p.NewBaseReactor("Mempool", memR)
+	memR.BaseReactor = *p2p.NewBaseReactor("Mempool", memR, async, recvBufSize)
 	return memR
 }
 
@@ -125,6 +126,12 @@ func (memR *Reactor) SetLogger(l log.Logger) {
 
 // OnStart implements p2p.BaseReactor.
 func (memR *Reactor) OnStart() error {
+	// call BaseReactor's OnStart()
+	err := memR.BaseReactor.OnStart()
+	if err != nil {
+		return err
+	}
+
 	if !memR.config.Broadcast {
 		memR.Logger.Info("Tx broadcasting is disabled")
 	}
@@ -180,12 +187,14 @@ func (memR *Reactor) Receive(chID byte, src p2p.Peer, msgBytes []byte) {
 		txInfo.SenderP2PID = src.ID()
 	}
 	for _, tx := range msg.Txs {
-		err = memR.mempool.CheckTx(tx, nil, txInfo)
-		if err == ErrTxInCache {
-			memR.Logger.Debug("Tx already exists in cache", "tx", txID(tx))
-		} else if err != nil {
-			memR.Logger.Info("Could not check tx", "tx", txID(tx), "err", err)
-		}
+		tx := tx // pin! workaround for `scopelint` error
+		memR.mempool.CheckTxAsync(tx, txInfo, func(err error) {
+			if err == ErrTxInCache {
+				memR.Logger.Debug("Tx already exists in cache", "tx", txID(tx))
+			} else if err != nil {
+				memR.Logger.Info("Could not check tx", "tx", txID(tx), "err", err)
+			}
+		}, nil)
 	}
 	// broadcasting happens from go routines per peer
 }

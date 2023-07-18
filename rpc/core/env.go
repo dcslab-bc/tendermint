@@ -5,24 +5,27 @@ import (
 	"fmt"
 	"time"
 
-	cfg "github.com/tendermint/tendermint/config"
-	"github.com/tendermint/tendermint/consensus"
-	"github.com/tendermint/tendermint/crypto"
-	tmjson "github.com/tendermint/tendermint/libs/json"
-	"github.com/tendermint/tendermint/libs/log"
-	mempl "github.com/tendermint/tendermint/mempool"
-	"github.com/tendermint/tendermint/p2p"
-	"github.com/tendermint/tendermint/proxy"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/state/indexer"
-	"github.com/tendermint/tendermint/state/txindex"
-	"github.com/tendermint/tendermint/types"
+	cfg "github.com/Finschia/ostracon/config"
+	"github.com/Finschia/ostracon/consensus"
+	"github.com/Finschia/ostracon/crypto"
+	tmjson "github.com/Finschia/ostracon/libs/json"
+	"github.com/Finschia/ostracon/libs/log"
+	mempl "github.com/Finschia/ostracon/mempool"
+	"github.com/Finschia/ostracon/p2p"
+	"github.com/Finschia/ostracon/proxy"
+	sm "github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/state/indexer"
+	"github.com/Finschia/ostracon/state/txindex"
+	"github.com/Finschia/ostracon/types"
 )
 
 const (
 	// see README
 	defaultPerPage = 30
-	maxPerPage     = 100
+
+	// Temporarily set it to a sufficient value to reduce the number of tx search queries during the test.
+	// TODO It will be modified later to be configurable. (Also, add a option to get all tx of block)
+	maxPerPage = 10000
 
 	// SubscribeTimeout is the maximum time we wait to subscribe for an event.
 	// must be less than the server's write timeout (see rpcserver.DefaultConfig)

@@ -7,9 +7,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/tendermint/tendermint/crypto"
 	tmversion "github.com/tendermint/tendermint/proto/tendermint/version"
-	"github.com/tendermint/tendermint/version"
+
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/version"
 )
 
 func TestLightBlockValidateBasic(t *testing.T) {
@@ -22,7 +23,7 @@ func TestLightBlockValidateBasic(t *testing.T) {
 	header.Version.Block = version.BlockProtocol
 	vals2, _ := RandValidatorSet(3, 1)
 	vals3 := vals.Copy()
-	vals3.Proposer = &Validator{}
+	vals3.Validators[2] = &Validator{}
 	commit.BlockID.Hash = header.Hash()
 
 	sh := &SignedHeader{
@@ -40,6 +41,8 @@ func TestLightBlockValidateBasic(t *testing.T) {
 		{"hashes don't match", sh, vals2, true},
 		{"invalid validator set", sh, vals3, true},
 		{"invalid signed header", &SignedHeader{Header: &header, Commit: randCommit(time.Now())}, vals, true},
+		{"empty signed header", nil, vals, true},
+		{"empty validator set", sh, nil, true},
 	}
 
 	for _, tc := range testCases {
@@ -65,8 +68,6 @@ func TestLightBlockProtobuf(t *testing.T) {
 	header.LastBlockID = commit.BlockID
 	header.Version.Block = version.BlockProtocol
 	header.ValidatorsHash = vals.Hash()
-	vals3 := vals.Copy()
-	vals3.Proposer = &Validator{}
 	commit.BlockID.Hash = header.Hash()
 
 	sh := &SignedHeader{

@@ -7,34 +7,30 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spf13/viper"
 
-	"github.com/tendermint/tendermint/abci/server"
-	"github.com/tendermint/tendermint/config"
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	tmflags "github.com/tendermint/tendermint/libs/cli/flags"
-	"github.com/tendermint/tendermint/libs/log"
-	tmnet "github.com/tendermint/tendermint/libs/net"
-	"github.com/tendermint/tendermint/light"
-	lproxy "github.com/tendermint/tendermint/light/proxy"
-	lrpc "github.com/tendermint/tendermint/light/rpc"
-	dbs "github.com/tendermint/tendermint/light/store/db"
-	"github.com/tendermint/tendermint/node"
-	"github.com/tendermint/tendermint/p2p"
-	"github.com/tendermint/tendermint/privval"
-	"github.com/tendermint/tendermint/proxy"
-	rpcserver "github.com/tendermint/tendermint/rpc/jsonrpc/server"
-	"github.com/tendermint/tendermint/test/e2e/app"
-	e2e "github.com/tendermint/tendermint/test/e2e/pkg"
-	mcs "github.com/tendermint/tendermint/test/maverick/consensus"
-	maverick "github.com/tendermint/tendermint/test/maverick/node"
+	"github.com/Finschia/ostracon/abci/server"
+	"github.com/Finschia/ostracon/config"
+	"github.com/Finschia/ostracon/crypto/ed25519"
+	"github.com/Finschia/ostracon/libs/log"
+	tmnet "github.com/Finschia/ostracon/libs/net"
+	"github.com/Finschia/ostracon/light"
+	lproxy "github.com/Finschia/ostracon/light/proxy"
+	lrpc "github.com/Finschia/ostracon/light/rpc"
+	dbs "github.com/Finschia/ostracon/light/store/db"
+	"github.com/Finschia/ostracon/node"
+	"github.com/Finschia/ostracon/p2p"
+	"github.com/Finschia/ostracon/privval"
+	"github.com/Finschia/ostracon/proxy"
+	rpcserver "github.com/Finschia/ostracon/rpc/jsonrpc/server"
+	"github.com/Finschia/ostracon/test/e2e/app"
+	e2e "github.com/Finschia/ostracon/test/e2e/pkg"
 )
 
-var logger = log.NewTMLogger(log.NewSyncWriter(os.Stdout))
+var logger = log.NewOCLogger(log.NewSyncWriter(os.Stdout))
 
 // main is the binary entrypoint.
 func main() {
@@ -75,14 +71,10 @@ func run(configFile string) error {
 	case "socket", "grpc":
 		err = startApp(cfg)
 	case "builtin":
-		if len(cfg.Misbehaviors) == 0 {
-			if cfg.Mode == string(e2e.ModeLight) {
-				err = startLightClient(cfg)
-			} else {
-				err = startNode(cfg)
-			}
+		if cfg.Mode == string(e2e.ModeLight) {
+			err = startLightClient(cfg)
 		} else {
-			err = startMaverick(cfg)
+			err = startNode(cfg)
 		}
 	default:
 		err = fmt.Errorf("invalid protocol %q", cfg.Protocol)
@@ -97,7 +89,7 @@ func run(configFile string) error {
 	}
 }
 
-// startApp starts the application server, listening for connections from Tendermint.
+// startApp starts the application server, listening for connections from Ostracon.
 func startApp(cfg *Config) error {
 	app, err := app.NewApplication(cfg.App())
 	if err != nil {
@@ -111,12 +103,12 @@ func startApp(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	logger.Info(fmt.Sprintf("Server listening on %v (%v protocol)", cfg.Listen, cfg.Protocol))
+	logger.Info("start app", "msg", log.NewLazySprintf("Server listening on %v (%v protocol)", cfg.Listen, cfg.Protocol))
 	return nil
 }
 
-// startNode starts a Tendermint node running the application directly. It assumes the Tendermint
-// configuration is in $TMHOME/config/tendermint.toml.
+// startNode starts an Ostracon node running the application directly. It assumes the Ostracon
+// configuration is in $OCHOME/config/ostracon.toml.
 //
 // FIXME There is no way to simply load the configuration from a file, so we need to pull in Viper.
 func startNode(cfg *Config) error {
@@ -130,8 +122,12 @@ func startNode(cfg *Config) error {
 		return fmt.Errorf("failed to setup config: %w", err)
 	}
 
+	privVal := privval.LoadOrGenFilePV(tmcfg.PrivValidatorKeyFile(), tmcfg.PrivValidatorStateFile())
+	if err != nil {
+		return fmt.Errorf("failed to load/generate FilePV%w", err)
+	}
 	n, err := node.NewNode(tmcfg,
-		privval.LoadOrGenFilePV(tmcfg.PrivValidatorKeyFile(), tmcfg.PrivValidatorStateFile()),
+		privVal,
 		nodeKey,
 		proxy.NewLocalClientCreator(app),
 		node.DefaultGenesisDocProviderFunc(tmcfg),
@@ -202,43 +198,6 @@ func startLightClient(cfg *Config) error {
 	return nil
 }
 
-// FIXME: Temporarily disconnected maverick until it is redesigned
-// startMaverick starts a Maverick node that runs the application directly. It assumes the Tendermint
-// configuration is in $TMHOME/config/tendermint.toml.
-func startMaverick(cfg *Config) error {
-	app, err := app.NewApplication(cfg.App())
-	if err != nil {
-		return err
-	}
-
-	tmcfg, logger, nodeKey, err := setupNode()
-	if err != nil {
-		return fmt.Errorf("failed to setup config: %w", err)
-	}
-
-	misbehaviors := make(map[int64]mcs.Misbehavior, len(cfg.Misbehaviors))
-	for heightString, misbehaviorString := range cfg.Misbehaviors {
-		height, _ := strconv.ParseInt(heightString, 10, 64)
-		misbehaviors[height] = mcs.MisbehaviorList[misbehaviorString]
-	}
-
-	n, err := maverick.NewNode(tmcfg,
-		maverick.LoadOrGenFilePV(tmcfg.PrivValidatorKeyFile(), tmcfg.PrivValidatorStateFile()),
-		nodeKey,
-		proxy.NewLocalClientCreator(app),
-		maverick.DefaultGenesisDocProviderFunc(tmcfg),
-		maverick.DefaultDBProvider,
-		maverick.DefaultMetricsProvider(tmcfg.Instrumentation),
-		logger,
-		misbehaviors,
-	)
-	if err != nil {
-		return err
-	}
-
-	return n.Start()
-}
-
 // startSigner starts a signer server connecting to the given endpoint.
 func startSigner(cfg *Config) error {
 	filePV := privval.LoadFilePV(cfg.PrivValKey, cfg.PrivValState)
@@ -261,16 +220,16 @@ func startSigner(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	logger.Info(fmt.Sprintf("Remote signer connecting to %v", cfg.PrivValServer))
+	logger.Info("start signer", "msg", log.NewLazySprintf("Remote signer connecting to %v", cfg.PrivValServer))
 	return nil
 }
 
 func setupNode() (*config.Config, log.Logger, *p2p.NodeKey, error) {
 	var tmcfg *config.Config
 
-	home := os.Getenv("TMHOME")
+	home := os.Getenv("OCHOME")
 	if home == "" {
-		return nil, nil, nil, errors.New("TMHOME not set")
+		return nil, nil, nil, errors.New("OCHOME not set")
 	}
 
 	viper.AddConfigPath(filepath.Join(home, "config"))
@@ -293,10 +252,10 @@ func setupNode() (*config.Config, log.Logger, *p2p.NodeKey, error) {
 	}
 
 	if tmcfg.LogFormat == config.LogFormatJSON {
-		logger = log.NewTMJSONLogger(log.NewSyncWriter(os.Stdout))
+		logger = log.NewOCJSONLogger(log.NewSyncWriter(os.Stdout))
 	}
 
-	nodeLogger, err := tmflags.ParseLogLevel(tmcfg.LogLevel, logger, config.DefaultLogLevel)
+	nodeLogger, err := log.ParseLogLevel(tmcfg.LogLevel, logger, config.DefaultLogLevel)
 	if err != nil {
 		return nil, nil, nil, err
 	}

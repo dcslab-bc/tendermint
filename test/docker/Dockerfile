@@ -1,12 +1,12 @@
-FROM golang:1.15
+FROM golang:1.18
 
 # Grab deps (jq, hexdump, xxd, killall)
 RUN apt-get update && \
   apt-get install -y --no-install-recommends \
   jq bsdmainutils vim-common psmisc netcat curl
 
-# Setup tendermint repo
-ENV REPO $GOPATH/src/github.com/tendermint/tendermint
+# Setup ostracon repo
+ENV REPO $GOPATH/src/github.com/Finschia/ostracon
 ENV GOBIN $GOPATH/bin
 WORKDIR $REPO
 
@@ -16,15 +16,16 @@ COPY . $REPO
 
 # Install the vendored dependencies
 # docker caching prevents reinstall on code change!
-RUN make tools
+# XXX Should remove "make tools": https://github.com/Finschia/ostracon/commit/c6e0d20d4bf062921fcc1eb5b2399447a7d2226e#diff-76ed074a9305c04054cdebb9e9aad2d818052b07091de1f20cad0bbac34ffb52
+#RUN make tools
 
 # install ABCI CLI
 RUN make install_abci
 
-# install Tendermint
+# install ostracon
 RUN make install
 
-RUN tendermint testnet \
+RUN ostracon testnet \
   --config $REPO/test/docker/config-template.toml \
   --node-dir-prefix="mach" \
   --v=4 \

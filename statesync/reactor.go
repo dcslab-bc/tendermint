@@ -6,13 +6,14 @@ import (
 	"time"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/config"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
-	"github.com/tendermint/tendermint/p2p"
 	ssproto "github.com/tendermint/tendermint/proto/tendermint/statesync"
-	"github.com/tendermint/tendermint/proxy"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/types"
+
+	"github.com/Finschia/ostracon/config"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
+	"github.com/Finschia/ostracon/p2p"
+	"github.com/Finschia/ostracon/proxy"
+	sm "github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/types"
 )
 
 const (
@@ -45,7 +46,8 @@ func NewReactor(
 	cfg config.StateSyncConfig,
 	conn proxy.AppConnSnapshot,
 	connQuery proxy.AppConnQuery,
-	tempDir string,
+	async bool,
+	recvBufSize int,
 ) *Reactor {
 
 	r := &Reactor{
@@ -53,7 +55,7 @@ func NewReactor(
 		conn:      conn,
 		connQuery: connQuery,
 	}
-	r.BaseReactor = *p2p.NewBaseReactor("StateSync", r)
+	r.BaseReactor = *p2p.NewBaseReactor("StateSync", r, async, recvBufSize)
 
 	return r
 }
@@ -78,6 +80,11 @@ func (r *Reactor) GetChannels() []*p2p.ChannelDescriptor {
 
 // OnStart implements p2p.Reactor.
 func (r *Reactor) OnStart() error {
+	// call BaseReactor's OnStart()
+	err := r.BaseReactor.OnStart()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -255,13 +262,14 @@ func (r *Reactor) recentSnapshots(n uint32) ([]*snapshot, error) {
 	return snapshots, nil
 }
 
-// Sync runs a state sync, returning the new state and last commit at the snapshot height.
+// Sync runs a state sync, returning the new state, previous state and last commit at the snapshot height.
 // The caller must store the state and commit in the state database and block store.
-func (r *Reactor) Sync(stateProvider StateProvider, discoveryTime time.Duration) (sm.State, *types.Commit, error) {
+func (r *Reactor) Sync(
+	stateProvider StateProvider, discoveryTime time.Duration) (sm.State, sm.State, *types.Commit, error) {
 	r.mtx.Lock()
 	if r.syncer != nil {
 		r.mtx.Unlock()
-		return sm.State{}, nil, errors.New("a state sync is already in progress")
+		return sm.State{}, sm.State{}, nil, errors.New("a state sync is already in progress")
 	}
 	r.syncer = newSyncer(r.cfg, r.Logger, r.conn, r.connQuery, stateProvider, r.tempDir)
 	r.mtx.Unlock()
@@ -274,10 +282,10 @@ func (r *Reactor) Sync(stateProvider StateProvider, discoveryTime time.Duration)
 
 	hook()
 
-	state, commit, err := r.syncer.SyncAny(discoveryTime, hook)
+	state, previousState, commit, err := r.syncer.SyncAny(discoveryTime, hook)
 
 	r.mtx.Lock()
 	r.syncer = nil
 	r.mtx.Unlock()
-	return state, commit, err
+	return state, previousState, commit, err
 }

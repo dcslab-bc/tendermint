@@ -5,14 +5,14 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/types"
 )
 
 //-----------------------------------------------------
 // Validate block
 
-func validateBlock(state State, block *types.Block) error {
+func validateBlock(state State, round int32, block *types.Block) error {
 	// Validate internal consistency.
 	if err := block.ValidateBasic(); err != nil {
 		return err
@@ -145,6 +145,32 @@ func validateBlock(state State, block *types.Block) error {
 	// Check evidence doesn't exceed the limit amount of bytes.
 	if max, got := state.ConsensusParams.Evidence.MaxBytes, block.Evidence.ByteSize(); got > max {
 		return types.NewErrEvidenceOverflow(max, got)
+	}
+
+	// validate round
+	// The block round must be less than or equal to the current round
+	// If some proposer proposes his ValidBlock as a proposal, then the proposal block round is less than current round
+	if block.Round > round {
+		return types.NewErrInvalidRound(round, block.Round)
+	}
+
+	// validate proposer
+	proposer := state.Validators.SelectProposer(state.LastProofHash, block.Height, block.Round)
+	if !bytes.Equal(block.ProposerAddress.Bytes(), proposer.Address.Bytes()) {
+		return fmt.Errorf("block.ProposerAddress, %X, is not the proposer %X",
+			block.ProposerAddress,
+			proposer.Address,
+		)
+	}
+
+	// validate vrf proof
+	message := state.MakeHashMessage(block.Round)
+	proof := crypto.Proof(block.Proof)
+	_, err := proposer.PubKey.VRFVerify(proof, message)
+	if err != nil {
+		return types.NewErrInvalidProof(fmt.Sprintf(
+			"verification failed: %s; proof: %v, height=%d, round=%d, addr: %v",
+			err.Error(), block.Proof, block.Height, block.Round, block.ProposerAddress))
 	}
 
 	return nil

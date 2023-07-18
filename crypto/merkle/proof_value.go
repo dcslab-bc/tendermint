@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/tendermint/tendermint/crypto/tmhash"
 	tmcrypto "github.com/tendermint/tendermint/proto/tendermint/crypto"
+
+	"github.com/Finschia/ostracon/crypto/tmhash"
 )
 
 const ProofOpValue = "simple:v"
@@ -13,7 +14,7 @@ const ProofOpValue = "simple:v"
 // ValueOp takes a key and a single value as argument and
 // produces the root hash.  The corresponding tree structure is
 // the SimpleMap tree.  SimpleMap takes a Hasher, and currently
-// Tendermint uses tmhash.  SimpleValueOp should support
+// Ostracon uses tmhash.  SimpleValueOp should support
 // the hash function as used in tmhash.  TODO support
 // additional hash functions here as options/args to this
 // operator.
@@ -85,8 +86,8 @@ func (op ValueOp) Run(args [][]byte) ([][]byte, error) {
 
 	bz := new(bytes.Buffer)
 	// Wrap <op.Key, vhash> to hash the KVPair.
-	encodeByteSlice(bz, op.key) // nolint: errcheck // does not error
-	encodeByteSlice(bz, vhash)  // nolint: errcheck // does not error
+	encodeByteSlice(bz, op.key) //nolint: errcheck // does not error
+	encodeByteSlice(bz, vhash)  //nolint: errcheck // does not error
 	kvhash := leafHash(bz.Bytes())
 
 	if !bytes.Equal(kvhash, op.Proof.LeafHash) {

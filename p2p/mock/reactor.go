@@ -1,9 +1,9 @@
 package mock
 
 import (
-	"github.com/tendermint/tendermint/libs/log"
-	"github.com/tendermint/tendermint/p2p"
-	"github.com/tendermint/tendermint/p2p/conn"
+	"github.com/Finschia/ostracon/libs/log"
+	"github.com/Finschia/ostracon/p2p"
+	"github.com/Finschia/ostracon/p2p/conn"
 )
 
 type Reactor struct {
@@ -14,7 +14,7 @@ type Reactor struct {
 
 func NewReactor() *Reactor {
 	r := &Reactor{}
-	r.BaseReactor = *p2p.NewBaseReactor("Mock-PEX", r)
+	r.BaseReactor = *p2p.NewBaseReactor("Mock-PEX", r, true, 1000)
 	r.SetLogger(log.TestingLogger())
 	return r
 }

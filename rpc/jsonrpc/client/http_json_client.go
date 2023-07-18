@@ -5,14 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
-	tmsync "github.com/tendermint/tendermint/libs/sync"
-	types "github.com/tendermint/tendermint/rpc/jsonrpc/types"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
+	types "github.com/Finschia/ostracon/rpc/jsonrpc/types"
 )
 
 const (
@@ -22,6 +23,10 @@ const (
 	protoWS    = "ws"
 	protoTCP   = "tcp"
 	protoUNIX  = "unix"
+
+	defaultMaxIdleConns          = 10000
+	defaultIdleConnTimeout       = 60 // sec
+	defaultExpectContinueTimeout = 1  // sec
 )
 
 //-------------------------------------------------------------
@@ -217,7 +222,7 @@ func (c *Client) Call(
 
 	defer httpResponse.Body.Close()
 
-	responseBytes, err := ioutil.ReadAll(httpResponse.Body)
+	responseBytes, err := io.ReadAll(httpResponse.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -265,7 +270,7 @@ func (c *Client) sendBatch(ctx context.Context, requests []*jsonRPCBufferedReque
 
 	defer httpResponse.Body.Close()
 
-	responseBytes, err := ioutil.ReadAll(httpResponse.Body)
+	responseBytes, err := io.ReadAll(httpResponse.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read response body: %w", err)
 	}
@@ -397,8 +402,12 @@ func DefaultHTTPClient(remoteAddr string) (*http.Client, error) {
 	client := &http.Client{
 		Transport: &http.Transport{
 			// Set to true to prevent GZIP-bomb DoS attacks
-			DisableCompression: true,
-			Dial:               dialFn,
+			DisableCompression:    true,
+			Dial:                  dialFn,
+			MaxIdleConns:          defaultMaxIdleConns,
+			MaxIdleConnsPerHost:   defaultMaxIdleConns,
+			IdleConnTimeout:       defaultIdleConnTimeout * time.Second,
+			ExpectContinueTimeout: defaultExpectContinueTimeout * time.Second,
 		},
 	}
 

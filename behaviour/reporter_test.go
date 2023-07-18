@@ -4,8 +4,8 @@ import (
 	"sync"
 	"testing"
 
-	bh "github.com/tendermint/tendermint/behaviour"
-	"github.com/tendermint/tendermint/p2p"
+	bh "github.com/Finschia/ostracon/behaviour"
+	"github.com/Finschia/ostracon/p2p"
 )
 
 // TestMockReporter tests the MockReporter's ability to store reported

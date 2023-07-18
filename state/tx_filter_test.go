@@ -9,14 +9,15 @@ import (
 
 	dbm "github.com/tendermint/tm-db"
 
-	tmrand "github.com/tendermint/tendermint/libs/rand"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/crypto/vrf"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
+	sm "github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/types"
 )
 
 func TestTxFilter(t *testing.T) {
 	genDoc := randomGenesisDoc()
-	genDoc.ConsensusParams.Block.MaxBytes = 3000
+	genDoc.ConsensusParams.Block.MaxBytes = 3035
 	genDoc.ConsensusParams.Evidence.MaxBytes = 1500
 
 	// Max size of Txs is much smaller than size of block,
@@ -25,8 +26,8 @@ func TestTxFilter(t *testing.T) {
 		tx    types.Tx
 		isErr bool
 	}{
-		{types.Tx(tmrand.Bytes(2155)), false},
-		{types.Tx(tmrand.Bytes(2156)), true},
+		{types.Tx(tmrand.Bytes(2178 - vrf.ProofSize)), false},
+		{types.Tx(tmrand.Bytes(2189 - vrf.ProofSize)), true},
 		{types.Tx(tmrand.Bytes(3000)), true},
 	}
 

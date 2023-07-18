@@ -11,8 +11,8 @@ import (
 	secp256k1 "github.com/btcsuite/btcd/btcec"
 	"golang.org/x/crypto/ripemd160" // nolint: staticcheck // necessary for Bitcoin address format
 
-	"github.com/tendermint/tendermint/crypto"
-	tmjson "github.com/tendermint/tendermint/libs/json"
+	"github.com/Finschia/ostracon/crypto"
+	tmjson "github.com/Finschia/ostracon/libs/json"
 )
 
 //-------------------------------------
@@ -37,6 +37,11 @@ type PrivKey []byte
 // Bytes marshalls the private key using amino encoding.
 func (privKey PrivKey) Bytes() []byte {
 	return []byte(privKey)
+}
+
+// VRFProve is not supported in Secp256k1.
+func (privKey PrivKey) VRFProve(seed []byte) (crypto.Proof, error) {
+	return nil, fmt.Errorf("VRF prove is not supported by the secp256k1")
 }
 
 // PubKey performs the point-scalar multiplication from the privKey on the
@@ -179,6 +184,11 @@ func (pubKey PubKey) Bytes() []byte {
 
 func (pubKey PubKey) String() string {
 	return fmt.Sprintf("PubKeySecp256k1{%X}", []byte(pubKey))
+}
+
+// VRFVerify is not supported in Secp256k1.
+func (pubKey PubKey) VRFVerify(proof crypto.Proof, seed []byte) (crypto.Output, error) {
+	return nil, fmt.Errorf("VRF verify is not supported by the secp256k1")
 }
 
 func (pubKey PubKey) Equals(other crypto.PubKey) bool {

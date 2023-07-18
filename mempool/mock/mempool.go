@@ -2,9 +2,11 @@ package mock
 
 import (
 	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/libs/clist"
-	mempl "github.com/tendermint/tendermint/mempool"
-	"github.com/tendermint/tendermint/types"
+
+	ocabci "github.com/Finschia/ostracon/abci/types"
+	"github.com/Finschia/ostracon/libs/clist"
+	mempl "github.com/Finschia/ostracon/mempool"
+	"github.com/Finschia/ostracon/types"
 )
 
 // Mempool is an empty implementation of a Mempool, useful for testing.
@@ -15,14 +17,16 @@ var _ mempl.Mempool = Mempool{}
 func (Mempool) Lock()     {}
 func (Mempool) Unlock()   {}
 func (Mempool) Size() int { return 0 }
-func (Mempool) CheckTx(_ types.Tx, _ func(*abci.Response), _ mempl.TxInfo) error {
-	return nil
+func (Mempool) CheckTxSync(_ types.Tx, _ mempl.TxInfo) (*ocabci.Response, error) {
+	return nil, nil
 }
-func (Mempool) ReapMaxBytesMaxGas(_, _ int64) types.Txs { return types.Txs{} }
-func (Mempool) ReapMaxTxs(n int) types.Txs              { return types.Txs{} }
+func (Mempool) CheckTxAsync(_ types.Tx, _ mempl.TxInfo, _ func(error), _ func(*ocabci.Response)) {
+}
+func (Mempool) ReapMaxBytesMaxGas(_, _ int64) types.Txs          { return types.Txs{} }
+func (Mempool) ReapMaxBytesMaxGasMaxTxs(_, _, _ int64) types.Txs { return types.Txs{} }
+func (Mempool) ReapMaxTxs(n int) types.Txs                       { return types.Txs{} }
 func (Mempool) Update(
-	_ int64,
-	_ types.Txs,
+	_ *types.Block,
 	_ []*abci.ResponseDeliverTx,
 	_ mempl.PreCheckFunc,
 	_ mempl.PostCheckFunc,

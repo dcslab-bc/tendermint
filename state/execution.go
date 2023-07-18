@@ -6,14 +6,19 @@ import (
 	"time"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	cryptoenc "github.com/tendermint/tendermint/crypto/encoding"
-	"github.com/tendermint/tendermint/libs/fail"
-	"github.com/tendermint/tendermint/libs/log"
-	mempl "github.com/tendermint/tendermint/mempool"
-	tmstate "github.com/tendermint/tendermint/proto/tendermint/state"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	"github.com/tendermint/tendermint/proxy"
-	"github.com/tendermint/tendermint/types"
+
+	ocabci "github.com/Finschia/ostracon/abci/types"
+	"github.com/Finschia/ostracon/crypto"
+	cryptoenc "github.com/Finschia/ostracon/crypto/encoding"
+	"github.com/Finschia/ostracon/crypto/vrf"
+	"github.com/Finschia/ostracon/libs/fail"
+	"github.com/Finschia/ostracon/libs/log"
+	mempl "github.com/Finschia/ostracon/mempool"
+	tmstate "github.com/Finschia/ostracon/proto/ostracon/state"
+	"github.com/Finschia/ostracon/proxy"
+	"github.com/Finschia/ostracon/types"
+	canonictime "github.com/Finschia/ostracon/types/time"
 )
 
 //-----------------------------------------------------------------------------
@@ -40,6 +45,30 @@ type BlockExecutor struct {
 	logger log.Logger
 
 	metrics *Metrics
+}
+
+type CommitStepTimes struct {
+	CommitExecuting  types.StepDuration
+	CommitCommitting types.StepDuration
+	CommitRechecking types.StepDuration
+	Current          *types.StepDuration
+}
+
+func (st *CommitStepTimes) ToNextStep(from, next *types.StepDuration) time.Time {
+	now := canonictime.Now()
+	if st.Current == from {
+		from.End, next.Start = now, now
+		st.Current = next
+	}
+	return now
+}
+
+func (st *CommitStepTimes) ToCommitCommitting() time.Time {
+	return st.ToNextStep(&st.CommitExecuting, &st.CommitCommitting)
+}
+
+func (st *CommitStepTimes) ToCommitRechecking() time.Time {
+	return st.ToNextStep(&st.CommitCommitting, &st.CommitRechecking)
 }
 
 type BlockExecutorOption func(executor *BlockExecutor)
@@ -95,6 +124,9 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 	height int64,
 	state State, commit *types.Commit,
 	proposerAddr []byte,
+	round int32,
+	proof crypto.Proof,
+	maxTxs int64,
 ) (*types.Block, *types.PartSet) {
 
 	maxBytes := state.ConsensusParams.Block.MaxBytes
@@ -105,17 +137,17 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 	// Fetch a limited amount of valid txs
 	maxDataBytes := types.MaxDataBytes(maxBytes, evSize, state.Validators.Size())
 
-	txs := blockExec.mempool.ReapMaxBytesMaxGas(maxDataBytes, maxGas)
+	txs := blockExec.mempool.ReapMaxBytesMaxGasMaxTxs(maxDataBytes, maxGas, maxTxs)
 
-	return state.MakeBlock(height, txs, commit, evidence, proposerAddr)
+	return state.MakeBlock(height, txs, commit, evidence, proposerAddr, round, proof)
 }
 
 // ValidateBlock validates the given block against the given state.
 // If the block is invalid, it returns an error.
 // Validation does not mutate state, but does require historical information from the stateDB,
 // ie. to verify evidence from a validator at an old height.
-func (blockExec *BlockExecutor) ValidateBlock(state State, block *types.Block) error {
-	err := validateBlock(state, block)
+func (blockExec *BlockExecutor) ValidateBlock(state State, round int32, block *types.Block) error {
+	err := validateBlock(state, round, block)
 	if err != nil {
 		return err
 	}
@@ -129,19 +161,25 @@ func (blockExec *BlockExecutor) ValidateBlock(state State, block *types.Block) e
 // from outside this package to process and commit an entire block.
 // It takes a blockID to avoid recomputing the parts hash.
 func (blockExec *BlockExecutor) ApplyBlock(
-	state State, blockID types.BlockID, block *types.Block,
+	state State, blockID types.BlockID, block *types.Block, stepTimes *CommitStepTimes,
 ) (State, int64, error) {
 
-	if err := validateBlock(state, block); err != nil {
+	// When doing ApplyBlock, we don't need to check whether the block.Round is same to current round,
+	// so we just put block.Round for the current round parameter
+	if err := blockExec.ValidateBlock(state, block.Round, block); err != nil {
 		return state, 0, ErrInvalidBlock(err)
 	}
 
-	startTime := time.Now().UnixNano()
+	execStartTime := time.Now().UnixNano()
 	abciResponses, err := execBlockOnProxyApp(
 		blockExec.logger, blockExec.proxyApp, block, blockExec.store, state.InitialHeight,
 	)
-	endTime := time.Now().UnixNano()
-	blockExec.metrics.BlockProcessingTime.Observe(float64(endTime-startTime) / 1000000)
+	execEndTime := time.Now().UnixNano()
+
+	execTimeMs := float64(execEndTime-execStartTime) / 1000000
+	blockExec.metrics.BlockProcessingTime.Observe(execTimeMs)
+	blockExec.metrics.BlockExecutionTime.Set(execTimeMs)
+
 	if err != nil {
 		return state, 0, ErrProxyAppConn(err)
 	}
@@ -155,14 +193,14 @@ func (blockExec *BlockExecutor) ApplyBlock(
 
 	fail.Fail() // XXX
 
-	// validate the validator updates and convert to tendermint types
+	// validate the validator updates and convert to ostracon types
 	abciValUpdates := abciResponses.EndBlock.ValidatorUpdates
 	err = validateValidatorUpdates(abciValUpdates, state.ConsensusParams.Validator)
 	if err != nil {
 		return state, 0, fmt.Errorf("error in validator updates: %v", err)
 	}
 
-	validatorUpdates, err := types.PB2TM.ValidatorUpdates(abciValUpdates)
+	validatorUpdates, err := types.PB2OC.ValidatorUpdates(abciValUpdates)
 	if err != nil {
 		return state, 0, err
 	}
@@ -171,13 +209,23 @@ func (blockExec *BlockExecutor) ApplyBlock(
 	}
 
 	// Update the state with the block and responses.
-	state, err = updateState(state, blockID, &block.Header, abciResponses, validatorUpdates)
+	state, err = updateState(state, blockID, &block.Header, &block.Entropy, abciResponses, validatorUpdates)
 	if err != nil {
 		return state, 0, fmt.Errorf("commit failed for application: %v", err)
 	}
 
+	if stepTimes != nil {
+		stepTimes.ToCommitCommitting()
+	}
+
 	// Lock mempool, commit app state, update mempoool.
-	appHash, retainHeight, err := blockExec.Commit(state, block, abciResponses.DeliverTxs)
+	commitStartTime := time.Now().UnixNano()
+	appHash, retainHeight, err := blockExec.Commit(state, block, abciResponses.DeliverTxs, stepTimes)
+	commitEndTime := time.Now().UnixNano()
+
+	commitTimeMs := float64(commitEndTime-commitStartTime) / 1000000
+	blockExec.metrics.BlockCommitTime.Set(commitTimeMs)
+
 	if err != nil {
 		return state, 0, fmt.Errorf("commit failed for application: %v", err)
 	}
@@ -194,6 +242,21 @@ func (blockExec *BlockExecutor) ApplyBlock(
 	}
 
 	fail.Fail() // XXX
+
+	// Can't use stepTimes at this point as it gets wrapped up by the caller of this function
+	blockGenerationTimeMs := float64((time.Now().UnixNano() - execStartTime) / 1000000.0)
+	numTxs := len(block.Txs)
+	tps := 0
+	if blockGenerationTimeMs > 0 {
+		tps = int(float64(numTxs) / blockGenerationTimeMs * 1000.0)
+	}
+	blockExec.logger.Info(
+		"block generated",
+		"height", block.Height,
+		"num_txs", numTxs,
+		"generation_time", blockGenerationTimeMs/1000.0,
+		"tps", tps,
+	)
 
 	// Events are fired after everything else.
 	// NOTE: if we crash between Commit and Save, events wont be fired during replay
@@ -212,6 +275,7 @@ func (blockExec *BlockExecutor) Commit(
 	state State,
 	block *types.Block,
 	deliverTxResponses []*abci.ResponseDeliverTx,
+	stepTimes *CommitStepTimes,
 ) ([]byte, int64, error) {
 	blockExec.mempool.Lock()
 	defer blockExec.mempool.Unlock()
@@ -225,27 +289,44 @@ func (blockExec *BlockExecutor) Commit(
 	}
 
 	// Commit block, get hash back
+	appCommitStartTime := time.Now().UnixNano()
 	res, err := blockExec.proxyApp.CommitSync()
+	appCommitEndTime := time.Now().UnixNano()
+
+	appCommitTimeMs := float64(appCommitEndTime-appCommitStartTime) / 1000000
+	blockExec.metrics.BlockAppCommitTime.Set(appCommitTimeMs)
+
 	if err != nil {
 		blockExec.logger.Error("client error during proxyAppConn.CommitSync", "err", err)
 		return nil, 0, err
 	}
 
 	// ResponseCommit has no error code - just data
+
+	if stepTimes != nil {
+		stepTimes.ToCommitRechecking()
+	}
+
+	// Update mempool.
+	updateMempoolStartTime := time.Now().UnixNano()
+	err = blockExec.mempool.Update(
+		block,
+		deliverTxResponses,
+		TxPreCheck(state),
+		TxPostCheck(state),
+	)
+	updateMempoolEndTime := time.Now().UnixNano()
+
+	updateMempoolTimeMs := float64(updateMempoolEndTime-updateMempoolStartTime) / 1000000
+	blockExec.metrics.BlockUpdateMempoolTime.Set(updateMempoolTimeMs)
+
 	blockExec.logger.Info(
 		"committed state",
 		"height", block.Height,
 		"num_txs", len(block.Txs),
 		"app_hash", fmt.Sprintf("%X", res.Data),
-	)
-
-	// Update mempool.
-	err = blockExec.mempool.Update(
-		block.Height,
-		block.Txs,
-		deliverTxResponses,
-		TxPreCheck(state),
-		TxPostCheck(state),
+		"commit_time", float64(int(appCommitTimeMs))/1000.0,
+		"update_mempool_time", float64(int(updateMempoolTimeMs))/1000.0,
 	)
 
 	return res.Data, res.RetainHeight, err
@@ -271,13 +352,13 @@ func execBlockOnProxyApp(
 	abciResponses.DeliverTxs = dtxs
 
 	// Execute transactions and get hash.
-	proxyCb := func(req *abci.Request, res *abci.Response) {
-		if r, ok := res.Value.(*abci.Response_DeliverTx); ok {
+	proxyCb := func(req *ocabci.Request, res *ocabci.Response) {
+		if r, ok := res.Value.(*ocabci.Response_DeliverTx); ok {
 			// TODO: make use of res.Log
 			// TODO: make use of this info
 			// Blocks may include invalid txs.
 			txRes := r.DeliverTx
-			if txRes.Code == abci.CodeTypeOK {
+			if txRes.Code == ocabci.CodeTypeOK {
 				validTxs++
 			} else {
 				logger.Debug("invalid tx", "code", txRes.Code, "log", txRes.Log)
@@ -288,7 +369,7 @@ func execBlockOnProxyApp(
 			txIndex++
 		}
 	}
-	proxyAppConn.SetResponseCallback(proxyCb)
+	proxyAppConn.SetGlobalCallback(proxyCb)
 
 	commitInfo := getBeginBlockValidatorInfo(block, store, initialHeight)
 
@@ -304,24 +385,33 @@ func execBlockOnProxyApp(
 		return nil, errors.New("nil header")
 	}
 
-	abciResponses.BeginBlock, err = proxyAppConn.BeginBlockSync(abci.RequestBeginBlock{
+	pbe := block.Entropy.ToProto()
+	if pbe == nil {
+		return nil, errors.New("nil entropy")
+	}
+
+	abciResponses.BeginBlock, err = proxyAppConn.BeginBlockSync(ocabci.RequestBeginBlock{
 		Hash:                block.Hash(),
 		Header:              *pbh,
 		LastCommitInfo:      commitInfo,
 		ByzantineValidators: byzVals,
+		Entropy:             *pbe,
 	})
 	if err != nil {
 		logger.Error("error in proxyAppConn.BeginBlock", "err", err)
 		return nil, err
 	}
 
+	startTime := time.Now()
 	// run txs of block
 	for _, tx := range block.Txs {
-		proxyAppConn.DeliverTxAsync(abci.RequestDeliverTx{Tx: tx})
+		proxyAppConn.DeliverTxAsync(abci.RequestDeliverTx{Tx: tx}, nil)
 		if err := proxyAppConn.Error(); err != nil {
 			return nil, err
 		}
 	}
+	endTime := time.Now()
+	execTime := endTime.Sub(startTime)
 
 	// End block.
 	abciResponses.EndBlock, err = proxyAppConn.EndBlockSync(abci.RequestEndBlock{Height: block.Height})
@@ -330,7 +420,12 @@ func execBlockOnProxyApp(
 		return nil, err
 	}
 
-	logger.Info("executed block", "height", block.Height, "num_valid_txs", validTxs, "num_invalid_txs", invalidTxs)
+	tps := 0
+	if execTime.Milliseconds() > 0 {
+		tps = int(float64(validTxs+invalidTxs) / float64(execTime.Milliseconds()) * 1000.0)
+	}
+	logger.Info("executed block", "height", block.Height, "num_valid_txs", validTxs,
+		"num_invalid_txs", invalidTxs, "exec_time", float64(execTime.Milliseconds())/1000.0, "tps", tps)
 	return abciResponses, nil
 }
 
@@ -362,7 +457,7 @@ func getBeginBlockValidatorInfo(block *types.Block, store Store,
 		for i, val := range lastValSet.Validators {
 			commitSig := block.LastCommit.Signatures[i]
 			voteInfos[i] = abci.VoteInfo{
-				Validator:       types.TM2PB.Validator(val),
+				Validator:       types.OC2PB.Validator(val),
 				SignedLastBlock: !commitSig.Absent(),
 			}
 		}
@@ -386,7 +481,7 @@ func validateValidatorUpdates(abciUpdates []abci.ValidatorUpdate,
 		}
 
 		// Check if validator's pubkey matches an ABCI type in the consensus params
-		pk, err := cryptoenc.PubKeyFromProto(valUpdate.PubKey)
+		pk, err := cryptoenc.PubKeyFromProto(&valUpdate.PubKey)
 		if err != nil {
 			return err
 		}
@@ -404,6 +499,7 @@ func updateState(
 	state State,
 	blockID types.BlockID,
 	header *types.Header,
+	entropy *types.Entropy,
 	abciResponses *tmstate.ABCIResponses,
 	validatorUpdates []*types.Validator,
 ) (State, error) {
@@ -445,6 +541,12 @@ func updateState(
 
 	nextVersion := state.Version
 
+	// get proof hash from vrf proof
+	proofHash, err := vrf.ProofToHash(entropy.Proof.Bytes())
+	if err != nil {
+		return state, fmt.Errorf("error get proof of hash: %v", err)
+	}
+
 	// NOTE: the AppHash has not been populated.
 	// It will be filled on state.Save.
 	return State{
@@ -454,6 +556,7 @@ func updateState(
 		LastBlockHeight:                  header.Height,
 		LastBlockID:                      blockID,
 		LastBlockTime:                    header.Time,
+		LastProofHash:                    proofHash,
 		NextValidators:                   nValSet,
 		Validators:                       state.NextValidators.Copy(),
 		LastValidators:                   state.Validators.Copy(),
@@ -467,7 +570,7 @@ func updateState(
 
 // Fire NewBlock, NewBlockHeader.
 // Fire TxEvent for every tx.
-// NOTE: if Tendermint crashes before commit, some or all of these events may be published again.
+// NOTE: if Ostracon crashes before commit, some or all of these events may be published again.
 func fireEvents(
 	logger log.Logger,
 	eventBus types.BlockEventPublisher,

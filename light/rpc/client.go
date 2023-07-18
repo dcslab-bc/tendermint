@@ -11,14 +11,15 @@ import (
 	"github.com/gogo/protobuf/proto"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/crypto/merkle"
-	tmbytes "github.com/tendermint/tendermint/libs/bytes"
-	tmmath "github.com/tendermint/tendermint/libs/math"
-	service "github.com/tendermint/tendermint/libs/service"
-	rpcclient "github.com/tendermint/tendermint/rpc/client"
-	ctypes "github.com/tendermint/tendermint/rpc/core/types"
-	rpctypes "github.com/tendermint/tendermint/rpc/jsonrpc/types"
-	"github.com/tendermint/tendermint/types"
+
+	"github.com/Finschia/ostracon/crypto/merkle"
+	tmbytes "github.com/Finschia/ostracon/libs/bytes"
+	tmmath "github.com/Finschia/ostracon/libs/math"
+	service "github.com/Finschia/ostracon/libs/service"
+	rpcclient "github.com/Finschia/ostracon/rpc/client"
+	ctypes "github.com/Finschia/ostracon/rpc/core/types"
+	rpctypes "github.com/Finschia/ostracon/rpc/jsonrpc/types"
+	"github.com/Finschia/ostracon/types"
 )
 
 var errNegOrZeroHeight = errors.New("negative or zero height")
@@ -27,6 +28,7 @@ var errNegOrZeroHeight = errors.New("negative or zero height")
 type KeyPathFunc func(path string, key []byte) (merkle.KeyPath, error)
 
 // LightClient is an interface that contains functionality needed by Client from the light client.
+//
 //go:generate mockery --case underscore --name LightClient
 type LightClient interface {
 	ChainID() string
@@ -322,9 +324,9 @@ func (c *Client) Block(ctx context.Context, height *int64) (*ctypes.ResultBlock,
 	if err := res.Block.ValidateBasic(); err != nil {
 		return nil, err
 	}
-	if bmH, bH := res.BlockID.Hash, res.Block.Hash(); !bytes.Equal(bmH, bH) {
-		return nil, fmt.Errorf("blockID %X does not match with block %X",
-			bmH, bH)
+	rbID := types.BlockID{Hash: res.Block.Hash(), PartSetHeader: res.Block.MakePartSet(types.BlockPartSizeBytes).Header()}
+	if !res.BlockID.Equals(rbID) {
+		return nil, fmt.Errorf("blockID %v does not match with block %v", res.BlockID.String(), rbID.String())
 	}
 
 	// Update the light client if we're behind.
@@ -334,9 +336,8 @@ func (c *Client) Block(ctx context.Context, height *int64) (*ctypes.ResultBlock,
 	}
 
 	// Verify block.
-	if bH, tH := res.Block.Hash(), l.Hash(); !bytes.Equal(bH, tH) {
-		return nil, fmt.Errorf("block header %X does not match with trusted header %X",
-			bH, tH)
+	if !l.Commit.BlockID.Equals(res.BlockID) {
+		return nil, fmt.Errorf("blockID %v does not match with trusted blockID %v", res.BlockID.String(), l.Commit.BlockID.String())
 	}
 
 	return res, nil
@@ -497,6 +498,9 @@ func (c *Client) BlockSearch(
 }
 
 // Validators fetches and verifies validators.
+//
+// WARNING: only full validator sets are verified (when length of validators is
+// less than +perPage+. +perPage+ default is 30, max is 100).
 func (c *Client) Validators(
 	ctx context.Context,
 	height *int64,

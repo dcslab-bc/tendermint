@@ -4,8 +4,10 @@ import (
 	"fmt"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/p2p"
-	"github.com/tendermint/tendermint/types"
+
+	ocabci "github.com/Finschia/ostracon/abci/types"
+	"github.com/Finschia/ostracon/p2p"
+	"github.com/Finschia/ostracon/types"
 )
 
 // Mempool defines the mempool interface.
@@ -15,7 +17,8 @@ import (
 type Mempool interface {
 	// CheckTx executes a new transaction against the application to determine
 	// its validity and whether it should be added to the mempool.
-	CheckTx(tx types.Tx, callback func(*abci.Response), txInfo TxInfo) error
+	CheckTxSync(tx types.Tx, txInfo TxInfo) (*ocabci.Response, error)
+	CheckTxAsync(tx types.Tx, txInfo TxInfo, prepareCb func(error), checkTxCb func(*ocabci.Response))
 
 	// ReapMaxBytesMaxGas reaps transactions from the mempool up to maxBytes
 	// bytes total with the condition that the total gasWanted must be less than
@@ -23,6 +26,9 @@ type Mempool interface {
 	// If both maxes are negative, there is no cap on the size of all returned
 	// transactions (~ all available transactions).
 	ReapMaxBytesMaxGas(maxBytes, maxGas int64) types.Txs
+
+	// Puts cap on txs as well on top of ReapMaxBytesMaxGas
+	ReapMaxBytesMaxGasMaxTxs(maxBytes, maxGas, maxTxs int64) types.Txs
 
 	// ReapMaxTxs reaps up to max transactions from the mempool.
 	// If max is negative, there is no cap on the size of all returned
@@ -39,8 +45,7 @@ type Mempool interface {
 	// NOTE: this should be called *after* block is committed by consensus.
 	// NOTE: Lock/Unlock must be managed by caller
 	Update(
-		blockHeight int64,
-		blockTxs types.Txs,
+		block *types.Block,
 		deliverTxResponses []*abci.ResponseDeliverTx,
 		newPreFn PreCheckFunc,
 		newPostFn PostCheckFunc,
@@ -88,7 +93,7 @@ type PreCheckFunc func(types.Tx) error
 // PostCheckFunc is an optional filter executed after CheckTx and rejects
 // transaction if false is returned. An example would be to ensure a
 // transaction doesn't require more gas than available for the block.
-type PostCheckFunc func(types.Tx, *abci.ResponseCheckTx) error
+type PostCheckFunc func(types.Tx, *ocabci.ResponseCheckTx) error
 
 // TxInfo are parameters that get passed when attempting to add a tx to the
 // mempool.
@@ -118,7 +123,7 @@ func PreCheckMaxBytes(maxBytes int64) PreCheckFunc {
 // PostCheckMaxGas checks that the wanted gas is smaller or equal to the passed
 // maxGas. Returns nil if maxGas is -1.
 func PostCheckMaxGas(maxGas int64) PostCheckFunc {
-	return func(tx types.Tx, res *abci.ResponseCheckTx) error {
+	return func(tx types.Tx, res *ocabci.ResponseCheckTx) error {
 		if maxGas == -1 {
 			return nil
 		}

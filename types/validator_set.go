@@ -2,6 +2,7 @@ package types
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -9,9 +10,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/tendermint/tendermint/crypto/merkle"
-	tmmath "github.com/tendermint/tendermint/libs/math"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
+
+	"github.com/Finschia/ostracon/crypto/merkle"
+	"github.com/Finschia/ostracon/crypto/tmhash"
+	tmmath "github.com/Finschia/ostracon/libs/math"
 )
 
 const (
@@ -51,7 +54,6 @@ var ErrTotalVotingPowerOverflow = fmt.Errorf("total voting power of resulting va
 type ValidatorSet struct {
 	// NOTE: persisted via reflect, must be exported.
 	Validators []*Validator `json:"validators"`
-	Proposer   *Validator   `json:"proposer"`
 
 	// cached (unexported)
 	totalVotingPower int64
@@ -73,9 +75,6 @@ func NewValidatorSet(valz []*Validator) *ValidatorSet {
 	if err != nil {
 		panic(fmt.Sprintf("Cannot create validator set: %v", err))
 	}
-	if len(valz) > 0 {
-		vals.IncrementProposerPriority(1)
-	}
 	return vals
 }
 
@@ -88,10 +87,6 @@ func (vals *ValidatorSet) ValidateBasic() error {
 		if err := val.ValidateBasic(); err != nil {
 			return fmt.Errorf("invalid validator #%d: %w", idx, err)
 		}
-	}
-
-	if err := vals.Proposer.ValidateBasic(); err != nil {
-		return fmt.Errorf("proposer failed validate basic, error: %w", err)
 	}
 
 	return nil
@@ -110,8 +105,10 @@ func (vals *ValidatorSet) CopyIncrementProposerPriority(times int32) *ValidatorS
 	return copy
 }
 
-// IncrementProposerPriority increments ProposerPriority of each validator and
-// updates the proposer. Panics if validator set is empty.
+// TODO The current random selection by VRF uses VotingPower, so the processing on ProposerPriority can be removed,
+// TODO but it remains for later verification of random selection based on ProposerPriority.
+// IncrementProposerPriority increments ProposerPriority of each validator and updates the
+// proposer. Panics if validator set is empty.
 // `times` must be positive.
 func (vals *ValidatorSet) IncrementProposerPriority(times int32) {
 	if vals.IsNilOrEmpty() {
@@ -128,18 +125,14 @@ func (vals *ValidatorSet) IncrementProposerPriority(times int32) {
 	vals.RescalePriorities(diffMax)
 	vals.shiftByAvgProposerPriority()
 
-	var proposer *Validator
 	// Call IncrementProposerPriority(1) times times.
 	for i := int32(0); i < times; i++ {
-		proposer = vals.incrementProposerPriority()
+		_ = vals.incrementProposerPriority()
 	}
-
-	vals.Proposer = proposer
 }
 
-// RescalePriorities rescales the priorities such that the distance between the
-// maximum and minimum is smaller than `diffMax`. Panics if validator set is
-// empty.
+// RescalePriorities rescales the priorities such that the distance between the maximum and minimum
+// is smaller than `diffMax`.
 func (vals *ValidatorSet) RescalePriorities(diffMax int64) {
 	if vals.IsNilOrEmpty() {
 		panic("empty validator set")
@@ -249,7 +242,6 @@ func validatorListCopy(valsList []*Validator) []*Validator {
 func (vals *ValidatorSet) Copy() *ValidatorSet {
 	return &ValidatorSet{
 		Validators:       validatorListCopy(vals.Validators),
-		Proposer:         vals.Proposer,
 		totalVotingPower: vals.totalVotingPower,
 	}
 }
@@ -318,28 +310,6 @@ func (vals *ValidatorSet) TotalVotingPower() int64 {
 		vals.updateTotalVotingPower()
 	}
 	return vals.totalVotingPower
-}
-
-// GetProposer returns the current proposer. If the validator set is empty, nil
-// is returned.
-func (vals *ValidatorSet) GetProposer() (proposer *Validator) {
-	if len(vals.Validators) == 0 {
-		return nil
-	}
-	if vals.Proposer == nil {
-		vals.Proposer = vals.findProposer()
-	}
-	return vals.Proposer.Copy()
-}
-
-func (vals *ValidatorSet) findProposer() *Validator {
-	var proposer *Validator
-	for _, val := range vals.Validators {
-		if proposer == nil || !bytes.Equal(val.Address, proposer.Address) {
-			proposer = proposer.CompareProposerPriority(val)
-		}
-	}
-	return proposer
 }
 
 // Hash returns the Merkle root hash build using validators (as leaves) in the
@@ -662,6 +632,10 @@ func (vals *ValidatorSet) UpdateWithChangeSet(changes []*Validator) error {
 func (vals *ValidatorSet) VerifyCommit(chainID string, blockID BlockID,
 	height int64, commit *Commit) error {
 
+	if vals == nil || commit == nil {
+		return fmt.Errorf("invalid nil vals or commit:[%v] or [%v]", vals, commit)
+	}
+
 	if vals.Size() != len(commit.Signatures) {
 		return NewErrInvalidCommitSignatures(vals.Size(), len(commit.Signatures))
 	}
@@ -676,7 +650,7 @@ func (vals *ValidatorSet) VerifyCommit(chainID string, blockID BlockID,
 	}
 
 	talliedVotingPower := int64(0)
-	votingPowerNeeded := vals.TotalVotingPower() * 2 / 3
+	votingPowerNeeded := vals.TotalVotingPower() * 2 / 3 // FIXME: 🏺 arithmetic overflow
 	for idx, commitSig := range commit.Signatures {
 		if commitSig.Absent() {
 			continue // OK, some signatures can be absent.
@@ -717,6 +691,10 @@ func (vals *ValidatorSet) VerifyCommit(chainID string, blockID BlockID,
 func (vals *ValidatorSet) VerifyCommitLight(chainID string, blockID BlockID,
 	height int64, commit *Commit) error {
 
+	if vals == nil || commit == nil {
+		return fmt.Errorf("invalid nil vals or commit:[%v] or [%v]", vals, commit)
+	}
+
 	if vals.Size() != len(commit.Signatures) {
 		return NewErrInvalidCommitSignatures(vals.Size(), len(commit.Signatures))
 	}
@@ -731,7 +709,7 @@ func (vals *ValidatorSet) VerifyCommitLight(chainID string, blockID BlockID,
 	}
 
 	talliedVotingPower := int64(0)
-	votingPowerNeeded := vals.TotalVotingPower() * 2 / 3
+	votingPowerNeeded := vals.TotalVotingPower() * 2 / 3 // FIXME: 🏺 arithmetic overflow
 	for idx, commitSig := range commit.Signatures {
 		// No need to verify absent or nil votes.
 		if !commitSig.ForBlock() {
@@ -781,7 +759,7 @@ func (vals *ValidatorSet) VerifyCommitLightTrusting(chainID string, commit *Comm
 	// Safely calculate voting power needed.
 	totalVotingPowerMulByNumerator, overflow := safeMul(vals.TotalVotingPower(), int64(trustLevel.Numerator))
 	if overflow {
-		return errors.New("int64 overflow while calculating voting power needed. please provide smaller trustLevel numerator")
+		return errors.New("int64 overflow while calculating voting power needed. " + "please provide smaller trustLevel numerator")
 	}
 	votingPowerNeeded := totalVotingPowerMulByNumerator / int64(trustLevel.Denominator)
 
@@ -803,7 +781,7 @@ func (vals *ValidatorSet) VerifyCommitLightTrusting(chainID string, commit *Comm
 			}
 			seenVals[valIdx] = idx
 
-			// Validate signature.
+			// Verify Signature
 			voteSignBytes := commit.VoteSignBytes(chainID, int32(idx))
 			if !val.PubKey.VerifySignature(voteSignBytes, commitSig.Signature) {
 				return fmt.Errorf("wrong signature (#%d): %X", idx, commitSig.Signature)
@@ -820,31 +798,67 @@ func (vals *ValidatorSet) VerifyCommitLightTrusting(chainID string, commit *Comm
 	return ErrNotEnoughVotingPowerSigned{Got: talliedVotingPower, Needed: votingPowerNeeded}
 }
 
-// findPreviousProposer reverses the compare proposer priority function to find the validator
-// with the lowest proposer priority which would have been the previous proposer.
-//
-// Is used when recreating a validator set from an existing array of validators.
-func (vals *ValidatorSet) findPreviousProposer() *Validator {
-	var previousProposer *Validator
-	for _, val := range vals.Validators {
-		if previousProposer == nil {
-			previousProposer = val
-			continue
-		}
-		if previousProposer == previousProposer.CompareProposerPriority(val) {
-			previousProposer = val
-		}
+func (vals *ValidatorSet) SelectProposer(proofHash []byte, height int64, round int32) *Validator {
+	if vals.IsNilOrEmpty() {
+		panic("empty validator set")
 	}
-	return previousProposer
+	seed := hashToSeed(MakeRoundHash(proofHash, height, round))
+	random := nextRandom(&seed)
+	totalVotingPower := vals.TotalVotingPower()
+	thresholdVotingPower := dividePoint(random, totalVotingPower)
+	threshold := thresholdVotingPower
+	for _, val := range vals.Validators {
+		if threshold < uint64(val.VotingPower) {
+			return val
+		}
+		threshold -= uint64(val.VotingPower)
+	}
+
+	// This code will never be reached except in the following circumstances:
+	//   1) The totalVotingPower is not equal to the actual total VotingPower.
+	//   2) The length of vals.Validators is zero (but checked above).
+	// Both are due to unexpected state irregularities and can be identified by the output error message.
+	panic(fmt.Sprintf("Cannot select samples; r=%d, thresholdVotingPower=%d, totalVotingPower=%d: %+v",
+		random, thresholdVotingPower, totalVotingPower, vals))
+}
+
+var divider *big.Int
+
+func init() {
+	divider = new(big.Int).SetUint64(math.MaxInt64)
+	divider.Add(divider, big.NewInt(1))
+}
+
+// dividePoint computes x÷(MaxUint64+1)×y without overflow for uint64. it returns a value in the [0, y) range when x≠0.
+// Otherwise returns 0.
+func dividePoint(x uint64, y int64) uint64 {
+	totalBig := big.NewInt(y)
+	a := new(big.Int).SetUint64(x & math.MaxInt64)
+	a.Mul(a, totalBig)
+	a.Div(a, divider)
+	return a.Uint64()
+}
+
+// nextRandom implements SplitMix64 (based on http://xoshiro.di.unimi.it/splitmix64.c)
+//
+// The PRNG used for this random selection:
+//   1. must be deterministic.
+//   2. should easily portable, independent of language or library
+//   3. is not necessary to keep a long period like MT, since there aren't many random numbers to generate and
+//      we expect a certain amount of randomness in the seed.
+//
+// The shift-register type pRNG fits these requirements well, but there are too many variants. So we adopted SplitMix64,
+// which is used in Java's SplittableStream.
+// https://github.com/openjdk/jdk/blob/jdk-17+35/src/java.base/share/classes/java/util/SplittableRandom.java#L193-L197
+func nextRandom(rand *uint64) uint64 {
+	*rand += uint64(0x9e3779b97f4a7c15)
+	var z = *rand
+	z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9
+	z = (z ^ (z >> 27)) * 0x94d049bb133111eb
+	return z ^ (z >> 31)
 }
 
 //-----------------
-
-// IsErrNotEnoughVotingPowerSigned returns true if err is
-// ErrNotEnoughVotingPowerSigned.
-func IsErrNotEnoughVotingPowerSigned(err error) bool {
-	return errors.As(err, &ErrNotEnoughVotingPowerSigned{})
-}
 
 // ErrNotEnoughVotingPowerSigned is returned when not enough validators signed
 // a commit.
@@ -879,13 +893,10 @@ func (vals *ValidatorSet) StringIndented(indent string) string {
 		return false
 	})
 	return fmt.Sprintf(`ValidatorSet{
-%s  Proposer: %v
 %s  Validators:
 %s    %v
 %s}`,
-		indent, vals.GetProposer().String(),
-		indent,
-		indent, strings.Join(valStrings, "\n"+indent+"    "),
+		indent, indent, strings.Join(valStrings, "\n"+indent+"    "),
 		indent)
 
 }
@@ -940,15 +951,7 @@ func (vals *ValidatorSet) ToProto() (*tmproto.ValidatorSet, error) {
 	}
 	vp.Validators = valsProto
 
-	valProposer, err := vals.Proposer.ToProto()
-	if err != nil {
-		return nil, fmt.Errorf("toProto: validatorSet proposer error: %w", err)
-	}
-	vp.Proposer = valProposer
-
-	// NOTE: Sometimes we use the bytes of the proto form as a hash. This means that we need to
-	// be consistent with cached data
-	vp.TotalVotingPower = 0
+	vp.TotalVotingPower = vals.totalVotingPower
 
 	return vp, nil
 }
@@ -972,19 +975,7 @@ func ValidatorSetFromProto(vp *tmproto.ValidatorSet) (*ValidatorSet, error) {
 	}
 	vals.Validators = valsProto
 
-	p, err := ValidatorFromProto(vp.GetProposer())
-	if err != nil {
-		return nil, fmt.Errorf("fromProto: validatorSet proposer error: %w", err)
-	}
-
-	vals.Proposer = p
-
-	// NOTE: We can't trust the total voting power given to us by other peers. If someone were to
-	// inject a non-zeo value that wasn't the correct voting power we could assume a wrong total
-	// power hence we need to recompute it.
-	// FIXME: We should look to remove TotalVotingPower from proto or add it in the validators hash
-	// so we don't have to do this
-	vals.TotalVotingPower()
+	vals.totalVotingPower = vp.GetTotalVotingPower()
 
 	return vals, vals.ValidateBasic()
 }
@@ -1007,7 +998,6 @@ func ValidatorSetFromExistingValidators(valz []*Validator) (*ValidatorSet, error
 	vals := &ValidatorSet{
 		Validators: valz,
 	}
-	vals.Proposer = vals.findPreviousProposer()
 	vals.updateTotalVotingPower()
 	sort.Sort(ValidatorsByVotingPower(vals.Validators))
 	return vals, nil
@@ -1031,9 +1021,10 @@ func RandValidatorSet(numValidators int, votingPower int64) (*ValidatorSet, []Pr
 		privValidators[i] = privValidator
 	}
 
+	vals := NewValidatorSet(valz)
 	sort.Sort(PrivValidatorsByAddress(privValidators))
 
-	return NewValidatorSet(valz), privValidators
+	return vals, privValidators
 }
 
 // safe addition/subtraction/multiplication
@@ -1098,4 +1089,32 @@ func safeMul(a, b int64) (int64, bool) {
 	}
 
 	return a * b, false
+}
+
+//----------------------------------------
+
+func hashToSeed(hash []byte) uint64 {
+	for len(hash) < 8 {
+		hash = append(hash, byte(0))
+	}
+	return binary.LittleEndian.Uint64(hash[:8])
+}
+
+// MakeRoundHash combines the VRF hash, block height, and round to create a hash value for each round. This value is
+// used for random sampling of the Proposer.
+func MakeRoundHash(proofHash []byte, height int64, round int32) []byte {
+	b := make([]byte, 16)
+	binary.LittleEndian.PutUint64(b, uint64(height))
+	binary.LittleEndian.PutUint64(b[8:], uint64(round))
+	hash := tmhash.New()
+	if _, err := hash.Write(proofHash); err != nil {
+		panic(err)
+	}
+	if _, err := hash.Write(b[:8]); err != nil {
+		panic(err)
+	}
+	if _, err := hash.Write(b[8:16]); err != nil {
+		panic(err)
+	}
+	return hash.Sum(nil)
 }

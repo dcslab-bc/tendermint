@@ -3,12 +3,12 @@ package config
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
 
-	tmos "github.com/tendermint/tendermint/libs/os"
+	tmos "github.com/Finschia/ostracon/libs/os"
 )
 
 // DefaultDirPerm is the default permissions used when creating directories.
@@ -49,7 +49,7 @@ func EnsureRoot(rootDir string) {
 	}
 }
 
-// XXX: this func should probably be called by cmd/tendermint/commands/init.go
+// XXX: this func should probably be called by cmd/ostracon/commands/init.go
 // alongside the writing of the genesis.json and priv_validator.json
 func writeDefaultConfigFile(configFilePath string) {
 	WriteConfigFile(configFilePath, DefaultConfig())
@@ -73,7 +73,7 @@ const defaultConfigTemplate = `# This is a TOML config file.
 
 # NOTE: Any path below can be absolute (e.g. "/var/myawesomeapp/data") or
 # relative to the home directory (e.g. "data"). The home directory is
-# "$HOME/.tendermint" by default, but could be changed via $TMHOME env variable
+# "$HOME/.ostracon" by default, but could be changed via $OCHOME env variable
 # or --home cmd flag.
 
 #######################################################################
@@ -81,7 +81,7 @@ const defaultConfigTemplate = `# This is a TOML config file.
 #######################################################################
 
 # TCP or UNIX socket address of the ABCI application,
-# or the name of an ABCI application compiled in with the Tendermint binary
+# or the name of an ABCI application compiled in with the Ostracon binary
 proxy_app = "{{ .BaseConfig.ProxyApp }}"
 
 # A custom human readable name for this node
@@ -122,6 +122,27 @@ log_level = "{{ .BaseConfig.LogLevel }}"
 # Output format: 'plain' (colored text) or 'json'
 log_format = "{{ .BaseConfig.LogFormat }}"
 
+# LogPath is the file to write logs to(log dir + log filename)
+# ex) /Users/user/.app/logs/app.log
+# If left as an empty string, log file writing is disabled.
+log_path = "{{ .BaseConfig.LogPath }}"
+
+# LogMaxAge is the maximum number of days to retain old log files based on the
+# timestamp encoded in their filename.  Note that a day is defined as 24
+# hours and may not exactly correspond to calendar days due to daylight
+# savings, leap seconds, etc. The default is not to remove old log files
+# based on age.
+log_max_age = "{{ .BaseConfig.LogMaxAge }}"
+
+# LogMaxSize is the maximum size in megabytes of the log file before it gets
+# rotated. It defaults to 100 megabytes.
+log_max_size = "{{ .BaseConfig.LogMaxSize }}"
+
+# LogMaxBackups is the maximum number of old log files to retain. The default
+# is to retain all old log files (though MaxAge may still cause them to get
+# deleted.)
+log_max_backups = "{{ .BaseConfig.LogMaxBackups }}"
+
 ##### additional base config options #####
 
 # Path to the JSON file containing the initial validator set and other meta data
@@ -133,7 +154,7 @@ priv_validator_key_file = "{{ js .BaseConfig.PrivValidatorKey }}"
 # Path to the JSON file containing the last sign state of a validator
 priv_validator_state_file = "{{ js .BaseConfig.PrivValidatorState }}"
 
-# TCP or UNIX socket address for Tendermint to listen on for
+# TCP or UNIX socket address for Ostracon to listen on for
 # connections from an external PrivValidator process
 priv_validator_laddr = "{{ .BaseConfig.PrivValidatorListenAddr }}"
 
@@ -196,6 +217,29 @@ unsafe = {{ .RPC.Unsafe }}
 # 1024 - 40 - 10 - 50 = 924 = ~900
 max_open_connections = {{ .RPC.MaxOpenConnections }}
 
+# mirrors http.Server#ReadTimeout
+# ReadTimeout is the maximum duration for reading the entire
+# request, including the body.
+# Because ReadTimeout does not let Handlers make per-request
+# decisions on each request body's acceptable deadline or
+# upload rate, most users will prefer to use
+# ReadHeaderTimeout. It is valid to use them both.
+read_timeout = "{{ .RPC.ReadTimeout }}"
+
+# mirrors http.Server#WriteTimeout
+# WriteTimeout is the maximum duration before timing out
+# writes of the response. It is reset whenever a new
+# request's header is read. Like ReadTimeout, it does not
+# let Handlers make decisions on a per-request basis.
+write_timeout = "{{ .RPC.WriteTimeout }}"
+
+# mirrors http.Server#IdleTimeout
+# IdleTimeout is the maximum amount of time to wait for the
+# next request when keep-alives are enabled. If IdleTimeout
+# is zero, the value of ReadTimeout is used. If both are
+# zero, there is no timeout.
+idle_timeout = "{{ .RPC.IdleTimeout }}"
+
 # Maximum number of unique clientIDs that can /subscribe
 # If you're using /broadcast_tx_commit, set to the estimated maximum number
 # of broadcast_tx_commit calls per block.
@@ -234,7 +278,7 @@ experimental_websocket_write_buffer_size = {{ .RPC.WebSocketWriteBufferSize }}
 experimental_close_on_slow_client = {{ .RPC.CloseOnSlowClient }}
 
 # How long to wait for a tx to be committed during /broadcast_tx_commit.
-# WARNING: Using a value larger than 10s will result in increasing the
+# WARNING: Using a value larger than 'WriteTimeout' will result in increasing the
 # global HTTP write timeout, which applies to all connections and endpoints.
 # See https://github.com/tendermint/tendermint/issues/3435
 timeout_broadcast_tx_commit = "{{ .RPC.TimeoutBroadcastTxCommit }}"
@@ -246,17 +290,17 @@ max_body_bytes = {{ .RPC.MaxBodyBytes }}
 max_header_bytes = {{ .RPC.MaxHeaderBytes }}
 
 # The path to a file containing certificate that is used to create the HTTPS server.
-# Might be either absolute path or path related to Tendermint's config directory.
+# Might be either absolute path or path related to Ostracon's config directory.
 # If the certificate is signed by a certificate authority,
 # the certFile should be the concatenation of the server's certificate, any intermediates,
 # and the CA's certificate.
-# NOTE: both tls_cert_file and tls_key_file must be present for Tendermint to create HTTPS server.
+# NOTE: both tls_cert_file and tls_key_file must be present for Ostracon to create HTTPS server.
 # Otherwise, HTTP server is run.
 tls_cert_file = "{{ .RPC.TLSCertFile }}"
 
 # The path to a file containing matching private key that is used to create the HTTPS server.
-# Might be either absolute path or path related to Tendermint's config directory.
-# NOTE: both tls-cert-file and tls-key-file must be present for Tendermint to create HTTPS server.
+# Might be either absolute path or path related to Ostracon's config directory.
+# NOTE: both tls-cert-file and tls-key-file must be present for Ostracon to create HTTPS server.
 # Otherwise, HTTP server is run.
 tls_key_file = "{{ .RPC.TLSKeyFile }}"
 
@@ -336,6 +380,17 @@ allow_duplicate_ip = {{ .P2P.AllowDuplicateIP }}
 # Peer connection configuration.
 handshake_timeout = "{{ .P2P.HandshakeTimeout }}"
 dial_timeout = "{{ .P2P.DialTimeout }}"
+
+# Sync/async of reactor's receive function
+recv_async = {{ .P2P.RecvAsync }}
+
+# Size of channel buffer of reactor
+pex_recv_buf_size = {{ .P2P.PexRecvBufSize }}
+mempool_recv_buf_size = {{ .P2P.MempoolRecvBufSize }}
+evidence_recv_buf_size = {{ .P2P.EvidenceRecvBufSize }}
+consensus_recv_buf_size = {{ .P2P.ConsensusRecvBufSize }}
+blockchain_recv_buf_size = {{ .P2P.BlockchainRecvBufSize }}
+statesync_recv_buf_size = {{ .P2P.StatesyncRecvBufSize }}
 
 #######################################################
 ###          Mempool Configuration Option          ###
@@ -455,6 +510,9 @@ skip_timeout_commit = {{ .Consensus.SkipTimeoutCommit }}
 create_empty_blocks = {{ .Consensus.CreateEmptyBlocks }}
 create_empty_blocks_interval = "{{ .Consensus.CreateEmptyBlocksInterval }}"
 
+# Max transactions per block. No limit if <= 0.
+max_txs = {{ .Consensus.MaxTxs }}
+
 # Reactor sleep duration parameters
 peer_gossip_sleep_duration = "{{ .Consensus.PeerGossipSleepDuration }}"
 peer_query_maj23_sleep_duration = "{{ .Consensus.PeerQueryMaj23SleepDuration }}"
@@ -506,7 +564,7 @@ func ResetTestRoot(testName string) *Config {
 
 func ResetTestRootWithChainID(testName string, chainID string) *Config {
 	// create a unique, concurrency-safe test directory under os.TempDir()
-	rootDir, err := ioutil.TempDir("", fmt.Sprintf("%s-%s_", chainID, testName))
+	rootDir, err := os.MkdirTemp("", fmt.Sprintf("%s-%s_", chainID, testName))
 	if err != nil {
 		panic(err)
 	}
@@ -523,6 +581,7 @@ func ResetTestRootWithChainID(testName string, chainID string) *Config {
 	genesisFilePath := filepath.Join(rootDir, baseConfig.Genesis)
 	privKeyFilePath := filepath.Join(rootDir, baseConfig.PrivValidatorKey)
 	privStateFilePath := filepath.Join(rootDir, baseConfig.PrivValidatorState)
+	nodeKeyFilePath := filepath.Join(rootDir, baseConfig.NodeKey)
 
 	// Write default config file if missing.
 	if !tmos.FileExists(configFilePath) {
@@ -530,7 +589,7 @@ func ResetTestRootWithChainID(testName string, chainID string) *Config {
 	}
 	if !tmos.FileExists(genesisFilePath) {
 		if chainID == "" {
-			chainID = "tendermint_test"
+			chainID = "ostracon_test"
 		}
 		testGenesis := fmt.Sprintf(testGenesisFmt, chainID)
 		tmos.MustWriteFile(genesisFilePath, []byte(testGenesis), 0644)
@@ -538,6 +597,7 @@ func ResetTestRootWithChainID(testName string, chainID string) *Config {
 	// we always overwrite the priv val
 	tmos.MustWriteFile(privKeyFilePath, []byte(testPrivValidatorKey), 0644)
 	tmos.MustWriteFile(privStateFilePath, []byte(testPrivValidatorState), 0644)
+	tmos.MustWriteFile(nodeKeyFilePath, []byte(testNodeKey), 0644)
 
 	config := TestConfig().SetRoot(rootDir)
 	return config
@@ -587,6 +647,13 @@ var testPrivValidatorKey = `{
   "priv_key": {
     "type": "tendermint/PrivKeyEd25519",
     "value": "EVkqJO/jIXp3rkASXfh9YnyToYXRXhBr6g9cQVxPFnQBP/5povV4HTjvsy530kybxKHwEi85iU8YL0qQhSYVoQ=="
+  }
+}`
+
+var testNodeKey = `{
+  "priv_key": {
+    "type": "tendermint/PrivKeyEd25519",
+    "value": "hICuZLlVwHdzz6pAQOKk07MFn3Hze1EwwTUUhEDIdti9a1cQLR5Co/lxAzeGcyPWS/LuEr7qbgHmDUJT/nxx+Q=="
   }
 }`
 

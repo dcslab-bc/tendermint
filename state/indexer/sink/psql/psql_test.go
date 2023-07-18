@@ -20,7 +20,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/types"
+
+	ocabci "github.com/Finschia/ostracon/abci/types"
+	"github.com/Finschia/ostracon/types"
 
 	// Register the Postgres database driver.
 	_ "github.com/lib/pq"
@@ -108,9 +110,7 @@ func TestMain(m *testing.M) {
 	sm, err := readSchema()
 	if err != nil {
 		log.Fatalf("Reading schema: %v", err)
-	}
-	migrator := schema.NewMigrator()
-	if err := migrator.Apply(db, sm); err != nil {
+	} else if err := schema.NewMigrator().Apply(db, sm); err != nil {
 		log.Fatalf("Applying schema: %v", err)
 	}
 
@@ -260,7 +260,7 @@ func txResultWithEvents(events []abci.Event) *abci.TxResult {
 		Tx:     types.Tx("HELLO WORLD"),
 		Result: abci.ResponseDeliverTx{
 			Data:   []byte{0},
-			Code:   abci.CodeTypeOK,
+			Code:   ocabci.CodeTypeOK,
 			Log:    "",
 			Events: events,
 		},

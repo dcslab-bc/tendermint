@@ -11,10 +11,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/libs/log"
-	"github.com/tendermint/tendermint/libs/protoio"
 	tmp2p "github.com/tendermint/tendermint/proto/tendermint/p2p"
 	"github.com/tendermint/tendermint/proto/tendermint/types"
+
+	"github.com/Finschia/ostracon/libs/log"
+	"github.com/Finschia/ostracon/libs/protoio"
 )
 
 const maxPingPongPacketSize = 1024 // bytes

@@ -1,4 +1,3 @@
-//nolint: goconst
 package main
 
 import (
@@ -7,15 +6,15 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/tendermint/tendermint/test/e2e/app"
+	"github.com/Finschia/ostracon/test/e2e/app"
 )
 
 // Config is the application configuration.
 type Config struct {
-	ChainID          string `toml:"chain_id"`
-	Listen           string
-	Protocol         string
-	Dir              string
+	ChainID          string                      `toml:"chain_id"`
+	Listen           string                      `toml:"listen"`
+	Protocol         string                      `toml:"protocol"`
+	Dir              string                      `toml:"dir"`
 	Mode             string                      `toml:"mode"`
 	PersistInterval  uint64                      `toml:"persist_interval"`
 	SnapshotInterval uint64                      `toml:"snapshot_interval"`
@@ -24,7 +23,6 @@ type Config struct {
 	PrivValServer    string                      `toml:"privval_server"`
 	PrivValKey       string                      `toml:"privval_key"`
 	PrivValState     string                      `toml:"privval_state"`
-	Misbehaviors     map[string]string           `toml:"misbehaviors"`
 	KeyType          string                      `toml:"key_type"`
 }
 
@@ -56,6 +54,8 @@ func LoadConfig(file string) (*Config, error) {
 
 // Validate validates the configuration. We don't do exhaustive config
 // validation here, instead relying on Testnet.Validate() to handle it.
+//
+//nolint:goconst
 func (cfg Config) Validate() error {
 	switch {
 	case cfg.ChainID == "":

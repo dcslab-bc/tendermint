@@ -1,10 +1,10 @@
 package main
 
 import (
-	"fmt"
 	"time"
 
-	e2e "github.com/tendermint/tendermint/test/e2e/pkg"
+	"github.com/Finschia/ostracon/libs/log"
+	e2e "github.com/Finschia/ostracon/test/e2e/pkg"
 )
 
 // Wait waits for a number of blocks to be produced, and for all nodes to catch
@@ -19,7 +19,7 @@ func Wait(testnet *e2e.Testnet, blocks int64) error {
 
 // WaitUntil waits until a given height has been reached.
 func WaitUntil(testnet *e2e.Testnet, height int64) error {
-	logger.Info(fmt.Sprintf("Waiting for all nodes to reach height %v...", height))
+	logger.Info("wait until", "msg", log.NewLazySprintf("Waiting for all nodes to reach height %v...", height))
 	_, err := waitForAllNodes(testnet, height, waitingTime(len(testnet.Nodes)))
 	if err != nil {
 		return err

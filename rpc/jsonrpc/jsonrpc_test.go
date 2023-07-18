@@ -16,13 +16,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	tmbytes "github.com/tendermint/tendermint/libs/bytes"
-	"github.com/tendermint/tendermint/libs/log"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
+	tmbytes "github.com/Finschia/ostracon/libs/bytes"
+	"github.com/Finschia/ostracon/libs/log"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
 
-	client "github.com/tendermint/tendermint/rpc/jsonrpc/client"
-	server "github.com/tendermint/tendermint/rpc/jsonrpc/server"
-	types "github.com/tendermint/tendermint/rpc/jsonrpc/types"
+	client "github.com/Finschia/ostracon/rpc/jsonrpc/client"
+	server "github.com/Finschia/ostracon/rpc/jsonrpc/server"
+	types "github.com/Finschia/ostracon/rpc/jsonrpc/types"
 )
 
 // Client and Server should work over tcp or unix sockets
@@ -107,7 +107,7 @@ var colorFn = func(keyvals ...interface{}) term.FgBgColor {
 
 // launch unix and tcp servers
 func setup() {
-	logger := log.NewTMLoggerWithColorFn(log.NewSyncWriter(os.Stdout), colorFn)
+	logger := log.NewOCLoggerWithColorFn(log.NewSyncWriter(os.Stdout), colorFn)
 
 	cmd := exec.Command("rm", "-f", unixSocket)
 	err := cmd.Start()

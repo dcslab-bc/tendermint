@@ -6,12 +6,12 @@ import (
 	"regexp"
 	"strconv"
 
+	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	dbm "github.com/tendermint/tm-db"
 
-	tmsync "github.com/tendermint/tendermint/libs/sync"
-	"github.com/tendermint/tendermint/light/store"
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	"github.com/tendermint/tendermint/types"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
+	"github.com/Finschia/ostracon/light/store"
+	"github.com/Finschia/ostracon/types"
 )
 
 var (
@@ -76,7 +76,7 @@ func (s *dbs) SaveLightBlock(lb *types.LightBlock) error {
 	return nil
 }
 
-// DeleteLightBlockAndValidatorSet deletes the LightBlock from
+// DeleteLightBlock deletes the LightBlock from
 // the db.
 //
 // Safe for concurrent use by multiple goroutines.

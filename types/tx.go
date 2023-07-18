@@ -5,10 +5,11 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/tendermint/tendermint/crypto/merkle"
-	"github.com/tendermint/tendermint/crypto/tmhash"
-	tmbytes "github.com/tendermint/tendermint/libs/bytes"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
+
+	"github.com/Finschia/ostracon/crypto/merkle"
+	"github.com/Finschia/ostracon/crypto/tmhash"
+	tmbytes "github.com/Finschia/ostracon/libs/bytes"
 )
 
 // Tx is an arbitrary byte array.
@@ -16,7 +17,7 @@ import (
 // Might we want types here ?
 type Tx []byte
 
-// Hash computes the TMHASH hash of the wire encoded transaction.
+// Hash computes the OCHASH hash of the wire encoded transaction.
 func (tx Tx) Hash() []byte {
 	return tmhash.Sum(tx)
 }

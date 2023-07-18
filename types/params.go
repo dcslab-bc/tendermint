@@ -6,8 +6,10 @@ import (
 	"time"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/crypto/tmhash"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
+
+	"github.com/Finschia/ostracon/crypto/tmhash"
+	"github.com/Finschia/ostracon/version"
 )
 
 const (
@@ -59,7 +61,7 @@ func DefaultValidatorParams() tmproto.ValidatorParams {
 
 func DefaultVersionParams() tmproto.VersionParams {
 	return tmproto.VersionParams{
-		AppVersion: 0,
+		AppVersion: version.AppProtocol,
 	}
 }
 

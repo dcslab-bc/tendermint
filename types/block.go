@@ -10,16 +10,20 @@ import (
 	"github.com/gogo/protobuf/proto"
 	gogotypes "github.com/gogo/protobuf/types"
 
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/crypto/merkle"
-	"github.com/tendermint/tendermint/crypto/tmhash"
-	"github.com/tendermint/tendermint/libs/bits"
-	tmbytes "github.com/tendermint/tendermint/libs/bytes"
-	tmmath "github.com/tendermint/tendermint/libs/math"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	tmversion "github.com/tendermint/tendermint/proto/tendermint/version"
-	"github.com/tendermint/tendermint/version"
+
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/crypto/ed25519"
+	"github.com/Finschia/ostracon/crypto/merkle"
+	"github.com/Finschia/ostracon/crypto/tmhash"
+	"github.com/Finschia/ostracon/crypto/vrf"
+	"github.com/Finschia/ostracon/libs/bits"
+	tmbytes "github.com/Finschia/ostracon/libs/bytes"
+	tmmath "github.com/Finschia/ostracon/libs/math"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
+	ocproto "github.com/Finschia/ostracon/proto/ostracon/types"
+	"github.com/Finschia/ostracon/version"
 )
 
 const (
@@ -27,6 +31,11 @@ const (
 	// NOTE: Because app hash can be of arbitrary size, the header is therefore not
 	// capped in size and thus this number should be seen as a soft max
 	MaxHeaderBytes int64 = 626
+
+	// 🏺 Note that this value is the encoded size of the ProtocolBuffer. See TestMaxEntropyBytes() for how Tendermint
+	//  calculates this value. Add/remove Ostracon-specific field sizes to/from this heuristically determined constant.
+	MaxEntropyBytes int64 = (1 + 5) + // +Round
+		(2 + int64(vrf.ProofSize)) // +Proof
 
 	// MaxOverheadForBlock - maximum overhead to encode a block (up to
 	// MaxBlockSizeBytes in size) not including it's parts except Data.
@@ -39,7 +48,7 @@ const (
 	MaxOverheadForBlock int64 = 11
 )
 
-// Block defines the atomic unit of a Tendermint blockchain.
+// Block defines the atomic unit of an Ostracon blockchain.
 type Block struct {
 	mtx tmsync.Mutex
 
@@ -47,6 +56,27 @@ type Block struct {
 	Data       `json:"data"`
 	Evidence   EvidenceData `json:"evidence"`
 	LastCommit *Commit      `json:"last_commit"`
+	Entropy    `json:"entropy"`
+}
+
+// MakeBlock returns a new block with an empty header, except what can be
+// computed from itself.
+// It populates the same set of fields validated by ValidateBasic.
+func MakeBlock(height int64, txs []Tx, lastCommit *Commit, evidence []Evidence, version tmversion.Consensus) *Block {
+	block := &Block{
+		Header: Header{
+			Version: version,
+			Height:  height,
+		},
+		Data: Data{
+			Txs: txs,
+		},
+		Evidence:   EvidenceData{Evidence: evidence},
+		LastCommit: lastCommit,
+		Entropy:    Entropy{},
+	}
+	block.fillHeader()
+	return block
 }
 
 // ValidateBasic performs basic validation that doesn't involve state data.
@@ -100,6 +130,10 @@ func (b *Block) ValidateBasic() error {
 			b.EvidenceHash,
 			b.Evidence.Hash(),
 		)
+	}
+
+	if err := b.Entropy.ValidateBasic(); err != nil {
+		return fmt.Errorf("invalid entropy: %w", err)
 	}
 
 	return nil
@@ -190,6 +224,7 @@ func (b *Block) String() string {
 // Data
 // Evidence
 // LastCommit
+// Entropy
 // Hash
 func (b *Block) StringIndented(indent string) string {
 	if b == nil {
@@ -200,11 +235,13 @@ func (b *Block) StringIndented(indent string) string {
 %s  %v
 %s  %v
 %s  %v
+%s  %v
 %s}#%v`,
 		indent, b.Header.StringIndented(indent+"  "),
 		indent, b.Data.StringIndented(indent+"  "),
 		indent, b.Evidence.StringIndented(indent+"  "),
 		indent, b.LastCommit.StringIndented(indent+"  "),
+		indent, b.Entropy.StringIndented(indent+"  "),
 		indent, b.Hash())
 }
 
@@ -217,16 +254,17 @@ func (b *Block) StringShort() string {
 }
 
 // ToProto converts Block to protobuf
-func (b *Block) ToProto() (*tmproto.Block, error) {
+func (b *Block) ToProto() (*ocproto.Block, error) {
 	if b == nil {
 		return nil, errors.New("nil Block")
 	}
 
-	pb := new(tmproto.Block)
+	pb := new(ocproto.Block)
 
 	pb.Header = *b.Header.ToProto()
 	pb.LastCommit = b.LastCommit.ToProto()
 	pb.Data = b.Data.ToProto()
+	pb.Entropy = *b.Entropy.ToProto()
 
 	protoEvidence, err := b.Evidence.ToProto()
 	if err != nil {
@@ -239,7 +277,7 @@ func (b *Block) ToProto() (*tmproto.Block, error) {
 
 // FromProto sets a protobuf Block to the given pointer.
 // It returns an error if the block is invalid.
-func BlockFromProto(bp *tmproto.Block) (*Block, error) {
+func BlockFromProto(bp *ocproto.Block) (*Block, error) {
 	if bp == nil {
 		return nil, errors.New("nil block")
 	}
@@ -266,6 +304,11 @@ func BlockFromProto(bp *tmproto.Block) (*Block, error) {
 		}
 		b.LastCommit = lc
 	}
+	vp, err := EntropyFromProto(&bp.Entropy)
+	if err != nil {
+		return nil, err
+	}
+	b.Entropy = vp
 
 	return b, b.ValidateBasic()
 }
@@ -280,11 +323,12 @@ func MaxDataBytes(maxBytes, evidenceBytes int64, valsCount int) int64 {
 		MaxOverheadForBlock -
 		MaxHeaderBytes -
 		MaxCommitBytes(valsCount) -
-		evidenceBytes
+		evidenceBytes -
+		MaxEntropyBytes
 
 	if maxDataBytes < 0 {
 		panic(fmt.Sprintf(
-			"Negative MaxDataBytes. Block.MaxBytes=%d is too small to accommodate header&lastCommit&evidence=%d",
+			"Negative MaxDataBytes. Block.MaxBytes=%d is too small to accommodate header&lastCommit&evidence&entropy=%d",
 			maxBytes,
 			-(maxDataBytes - maxBytes),
 		))
@@ -302,11 +346,12 @@ func MaxDataBytesNoEvidence(maxBytes int64, valsCount int) int64 {
 	maxDataBytes := maxBytes -
 		MaxOverheadForBlock -
 		MaxHeaderBytes -
+		MaxEntropyBytes -
 		MaxCommitBytes(valsCount)
 
 	if maxDataBytes < 0 {
 		panic(fmt.Sprintf(
-			"Negative MaxDataBytesUnknownEvidence. Block.MaxBytes=%d is too small to accommodate header&lastCommit&evidence=%d",
+			"Negative MaxDataBytesUnknownEvidence. Block.MaxBytes=%d is too small to accommodate header&lastCommit&evidence&entropy=%d",
 			maxBytes,
 			-(maxDataBytes - maxBytes),
 		))
@@ -317,7 +362,7 @@ func MaxDataBytesNoEvidence(maxBytes int64, valsCount int) int64 {
 
 //-----------------------------------------------------------------------------
 
-// Header defines the structure of a Tendermint block header.
+// Header defines the structure of an Ostracon block header.
 // NOTE: changes to the Header should be duplicated in:
 // - header.Hash()
 // - abci.Header
@@ -583,12 +628,21 @@ const (
 	BlockIDFlagNil
 )
 
+// MaxCommitOverheadBytes is max size of commit without any commitSigs -> 82 for BlockID, 8 for Height, 4 for Round.
+// NOTE: 🏺This size is for the ProtocolBuffers representation of Commit without CommitSig. Therefore, it includes
+// the overhead of ProtocolBuffers in addition to the above number.
 const (
-	// Max size of commit without any commitSigs -> 82 for BlockID, 8 for Height, 4 for Round.
-	MaxCommitOverheadBytes int64 = 94
-	// Commit sig size is made up of 64 bytes for the signature, 20 bytes for the address,
+	MaxCommitOverheadBytes int64 = (1 + 9) + // Height
+		(1 + 5) + // Round
+		(1 + 76 + 1) // BlockID
+	// MaxCommitSigBytes sig size is made up of 64 bytes for the signature, 20 bytes for the address,
 	// 1 byte for the flag and 14 bytes for the timestamp
-	MaxCommitSigBytes int64 = 109
+	// NOTE: 🏺This size is for the ProtocolBuffers representation of CommitSig. Therefore, it includes the overhead of
+	// ProtocolBuffers in addition to the above number.
+	MaxCommitSigBytes int64 = (1 + 1) + // BlockIDFlag
+		(1 + 20 + 1) + // ValidatorAddress
+		(1 + 17 + 1) + // Timestamp
+		(1 + ed25519.SignatureSize + 1) // Signature
 )
 
 // CommitSig is a part of the Vote included in a Commit.
@@ -1247,4 +1301,93 @@ func BlockIDFromProto(bID *tmproto.BlockID) (*BlockID, error) {
 	blockID.Hash = bID.Hash
 
 	return blockID, blockID.ValidateBasic()
+}
+
+//-----------------------------------------------------------------------------
+
+// Entropy contains vrf proof and generated round
+type Entropy struct {
+	Round int32            `json:"round"`
+	Proof tmbytes.HexBytes `json:"proof"`
+}
+
+// Populate the Entropy with state-derived data.
+// Call this after MakeBlock to complete the Entropy.
+func (vp *Entropy) Populate(
+	round int32,
+	proof crypto.Proof,
+) {
+	vp.Round = round
+	vp.Proof = tmbytes.HexBytes(proof)
+}
+
+// ValidateBasic performs stateless validation on a Entropy returning an error
+// if any validation fails.
+func (vp Entropy) ValidateBasic() error {
+	// Add checking for Ostracon fields
+	if vp.Round < 0 {
+		return errors.New("negative Round")
+	}
+	if err := ValidateProof(vp.Proof); err != nil {
+		return fmt.Errorf("wrong Proof: %v", err)
+	}
+
+	return nil
+}
+
+// Hash returns the hash of the Entropy.
+// It computes a Merkle tree from the Entropy fields
+// ordered as they appear in the Entropy.
+// Returns nil if ValidatorHash is missing,
+// since a Entropy is not valid unless there is
+// a ValidatorsHash (corresponding to the validator set).
+func (vp *Entropy) Hash() tmbytes.HexBytes {
+	if vp == nil {
+		return nil
+	}
+	return merkle.HashFromByteSlices([][]byte{
+		cdcEncode(vp.Round),
+		cdcEncode(vp.Proof),
+	})
+}
+
+// StringIndented returns an indented string representation of the Entropy.
+func (vp *Entropy) StringIndented(indent string) string {
+	if vp == nil {
+		return "nil-Entropy"
+	}
+	return fmt.Sprintf(`Entropy{
+%s  Round:          %v
+%s  Proof:          %X
+%s}#%v`,
+		indent, vp.Round,
+		indent, vp.Proof,
+		indent, vp.Hash())
+}
+
+// ToProto converts Entropy to protobuf
+func (vp *Entropy) ToProto() *ocproto.Entropy {
+	if vp == nil {
+		return nil
+	}
+
+	return &ocproto.Entropy{
+		Round: vp.Round,
+		Proof: vp.Proof,
+	}
+}
+
+// FromProto sets a protobuf Entropy to the given pointer.
+// It returns an error if the Entropy is invalid.
+func EntropyFromProto(ph *ocproto.Entropy) (Entropy, error) {
+	if ph == nil {
+		return Entropy{}, errors.New("nil Entropy")
+	}
+
+	vp := new(Entropy)
+
+	vp.Round = ph.Round
+	vp.Proof = ph.Proof
+
+	return *vp, vp.ValidateBasic()
 }

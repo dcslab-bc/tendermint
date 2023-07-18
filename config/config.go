@@ -23,6 +23,8 @@ const (
 
 	// DefaultLogLevel defines a default log level as INFO.
 	DefaultLogLevel = "info"
+
+	DefaultDBBackend = "goleveldb"
 )
 
 // NOTE: Most of the structs & relevant comments + the
@@ -32,9 +34,9 @@ const (
 // config/toml.go
 // NOTE: libs/cli must know to look in the config dir!
 var (
-	DefaultTendermintDir = ".tendermint"
-	defaultConfigDir     = "config"
-	defaultDataDir       = "data"
+	DefaultOstraconDir = ".ostracon"
+	defaultConfigDir   = "config"
+	defaultDataDir     = "data"
 
 	defaultConfigFileName  = "config.toml"
 	defaultGenesisJSONName = "genesis.json"
@@ -57,7 +59,7 @@ var (
 	defaultSubscriptionBufferSize = 200
 )
 
-// Config defines the top level configuration for a Tendermint node
+// Config defines the top level configuration for an Ostracon node
 type Config struct {
 	// Top level options use an anonymous struct
 	BaseConfig `mapstructure:",squash"`
@@ -73,7 +75,7 @@ type Config struct {
 	Instrumentation *InstrumentationConfig `mapstructure:"instrumentation"`
 }
 
-// DefaultConfig returns a default configuration for a Tendermint node
+// DefaultConfig returns a default configuration for an Ostracon node
 func DefaultConfig() *Config {
 	return &Config{
 		BaseConfig:      DefaultBaseConfig(),
@@ -146,7 +148,7 @@ func (cfg *Config) ValidateBasic() error {
 //-----------------------------------------------------------------------------
 // BaseConfig
 
-// BaseConfig defines the base configuration for a Tendermint node
+// BaseConfig defines the base configuration for an Ostracon node
 type BaseConfig struct { //nolint: maligned
 	// chainID is unexposed and immutable but here for convenience
 	chainID string
@@ -156,7 +158,7 @@ type BaseConfig struct { //nolint: maligned
 	RootDir string `mapstructure:"home"`
 
 	// TCP or UNIX socket address of the ABCI application,
-	// or the name of an ABCI application compiled in with the Tendermint binary
+	// or the name of an ABCI application compiled in with the Ostracon binary
 	ProxyApp string `mapstructure:"proxy_app"`
 
 	// A custom human readable name for this node
@@ -197,6 +199,27 @@ type BaseConfig struct { //nolint: maligned
 	// Output format: 'plain' (colored text) or 'json'
 	LogFormat string `mapstructure:"log_format"`
 
+	// LogPath is the file to write logs to(log dir + log filename)
+	// ex) /Users/user/.app/logs/app.log
+	// If left as an empty string, log file writing is disabled.
+	LogPath string `mapstructure:"log_path"`
+
+	// LogMaxAge is the maximum number of days to retain old log files based on the
+	// timestamp encoded in their filename.  Note that a day is defined as 24
+	// hours and may not exactly correspond to calendar days due to daylight
+	// savings, leap seconds, etc. The default is not to remove old log files
+	// based on age.
+	LogMaxAge int `mapstructure:"log_max_age"`
+
+	// LogMaxSize is the maximum size in megabytes of the log file before it gets
+	// rotated. It defaults to 100 megabytes.
+	LogMaxSize int `mapstructure:"log_max_size"`
+
+	// LogMaxBackups is the maximum number of old log files to retain. The default
+	// is to retain all old log files (though MaxAge may still cause them to get
+	// deleted.)
+	LogMaxBackups int `mapstructure:"log_max_backups"`
+
 	// Path to the JSON file containing the initial validator set and other meta data
 	Genesis string `mapstructure:"genesis_file"`
 
@@ -206,7 +229,7 @@ type BaseConfig struct { //nolint: maligned
 	// Path to the JSON file containing the last sign state of a validator
 	PrivValidatorState string `mapstructure:"priv_validator_state_file"`
 
-	// TCP or UNIX socket address for Tendermint to listen on for
+	// TCP or UNIX socket address for Ostracon to listen on for
 	// connections from an external PrivValidator process
 	PrivValidatorListenAddr string `mapstructure:"priv_validator_laddr"`
 
@@ -221,7 +244,7 @@ type BaseConfig struct { //nolint: maligned
 	FilterPeers bool `mapstructure:"filter_peers"` // false
 }
 
-// DefaultBaseConfig returns a default base configuration for a Tendermint node
+// DefaultBaseConfig returns a default base configuration for an Ostracon node
 func DefaultBaseConfig() BaseConfig {
 	return BaseConfig{
 		Genesis:            defaultGenesisJSONPath,
@@ -231,19 +254,23 @@ func DefaultBaseConfig() BaseConfig {
 		Moniker:            defaultMoniker,
 		ProxyApp:           "tcp://127.0.0.1:26658",
 		ABCI:               "socket",
-		LogLevel:           DefaultLogLevel,
+		LogLevel:           DefaultPackageLogLevels(),
 		LogFormat:          LogFormatPlain,
+		LogPath:            "",
+		LogMaxAge:          0,
+		LogMaxSize:         100,
+		LogMaxBackups:      0,
 		FastSyncMode:       true,
 		FilterPeers:        false,
-		DBBackend:          "goleveldb",
+		DBBackend:          DefaultDBBackend,
 		DBPath:             "data",
 	}
 }
 
-// TestBaseConfig returns a base configuration for testing a Tendermint node
+// TestBaseConfig returns a base configuration for testing an Ostracon node
 func TestBaseConfig() BaseConfig {
 	cfg := DefaultBaseConfig()
-	cfg.chainID = "tendermint_test"
+	cfg.chainID = "ostracon_test"
 	cfg.ProxyApp = "kvstore"
 	cfg.FastSyncMode = false
 	cfg.DBBackend = "memdb"
@@ -290,10 +317,16 @@ func (cfg BaseConfig) ValidateBasic() error {
 	return nil
 }
 
+// DefaultPackageLogLevels returns a default log level setting so all packages
+// log at "error", while the `state` and `main` packages log at "info"
+func DefaultPackageLogLevels() string {
+	return fmt.Sprintf("main:info,state:info,statesync:info,*:%s", DefaultLogLevel)
+}
+
 //-----------------------------------------------------------------------------
 // RPCConfig
 
-// RPCConfig defines the configuration options for the Tendermint RPC server
+// RPCConfig defines the configuration options for the Ostracon RPC server
 type RPCConfig struct {
 	RootDir string `mapstructure:"home"`
 
@@ -335,6 +368,30 @@ type RPCConfig struct {
 	// 1024 - 40 - 10 - 50 = 924 = ~900
 	MaxOpenConnections int `mapstructure:"max_open_connections"`
 
+	// mirrors http.Server#ReadTimeout
+	// ReadTimeout is the maximum duration for reading the entire
+	// request, including the body.
+	//
+	// Because ReadTimeout does not let Handlers make per-request
+	// decisions on each request body's acceptable deadline or
+	// upload rate, most users will prefer to use
+	// ReadHeaderTimeout. It is valid to use them both.
+	ReadTimeout time.Duration `mapstructure:"read_timeout"`
+
+	// mirrors http.Server#WriteTimeout
+	// WriteTimeout is the maximum duration before timing out
+	// writes of the response. It is reset whenever a new
+	// request's header is read. Like ReadTimeout, it does not
+	// let Handlers make decisions on a per-request basis.
+	WriteTimeout time.Duration `mapstructure:"write_timeout"`
+
+	// mirrors http.Server#IdleTimeout
+	// IdleTimeout is the maximum amount of time to wait for the
+	// next request when keep-alives are enabled. If IdleTimeout
+	// is zero, the value of ReadTimeout is used. If both are
+	// zero, there is no timeout.
+	IdleTimeout time.Duration `mapstructure:"idle_timeout"`
+
 	// Maximum number of unique clientIDs that can /subscribe
 	// If you're using /broadcast_tx_commit, set to the estimated maximum number
 	// of broadcast_tx_commit calls per block.
@@ -369,7 +426,7 @@ type RPCConfig struct {
 	CloseOnSlowClient bool `mapstructure:"experimental_close_on_slow_client"`
 
 	// How long to wait for a tx to be committed during /broadcast_tx_commit
-	// WARNING: Using a value larger than 10s will result in increasing the
+	// WARNING: Using a value larger than 'WriteTimeout' will result in increasing the
 	// global HTTP write timeout, which applies to all connections and endpoints.
 	// See https://github.com/tendermint/tendermint/issues/3435
 	TimeoutBroadcastTxCommit time.Duration `mapstructure:"timeout_broadcast_tx_commit"`
@@ -381,20 +438,20 @@ type RPCConfig struct {
 	MaxHeaderBytes int `mapstructure:"max_header_bytes"`
 
 	// The path to a file containing certificate that is used to create the HTTPS server.
-	// Might be either absolute path or path related to Tendermint's config directory.
+	// Might be either absolute path or path related to Ostracon's config directory.
 	//
 	// If the certificate is signed by a certificate authority,
 	// the certFile should be the concatenation of the server's certificate, any intermediates,
 	// and the CA's certificate.
 	//
-	// NOTE: both tls_cert_file and tls_key_file must be present for Tendermint to create HTTPS server.
+	// NOTE: both tls_cert_file and tls_key_file must be present for Ostracon to create HTTPS server.
 	// Otherwise, HTTP server is run.
 	TLSCertFile string `mapstructure:"tls_cert_file"`
 
 	// The path to a file containing matching private key that is used to create the HTTPS server.
-	// Might be either absolute path or path related to tendermint's config directory.
+	// Might be either absolute path or path related to ostracon's config directory.
 	//
-	// NOTE: both tls_cert_file and tls_key_file must be present for Tendermint to create HTTPS server.
+	// NOTE: both tls_cert_file and tls_key_file must be present for Ostracon to create HTTPS server.
 	// Otherwise, HTTP server is run.
 	TLSKeyFile string `mapstructure:"tls_key_file"`
 
@@ -414,6 +471,9 @@ func DefaultRPCConfig() *RPCConfig {
 
 		Unsafe:             false,
 		MaxOpenConnections: 900,
+		ReadTimeout:        10 * time.Second,
+		WriteTimeout:       10 * time.Second,
+		IdleTimeout:        60 * time.Second,
 
 		MaxSubscriptionClients:    100,
 		MaxSubscriptionsPerClient: 5,
@@ -446,6 +506,15 @@ func (cfg *RPCConfig) ValidateBasic() error {
 	}
 	if cfg.MaxOpenConnections < 0 {
 		return errors.New("max_open_connections can't be negative")
+	}
+	if cfg.ReadTimeout < 0 {
+		return errors.New("read_timeout can't be negative")
+	}
+	if cfg.WriteTimeout < 0 {
+		return errors.New("write_timeout can't be negative")
+	}
+	if cfg.IdleTimeout < 0 {
+		return errors.New("idle_timeout can't be negative")
 	}
 	if cfg.MaxSubscriptionClients < 0 {
 		return errors.New("max_subscription_clients can't be negative")
@@ -505,7 +574,7 @@ func (cfg RPCConfig) IsTLSEnabled() bool {
 //-----------------------------------------------------------------------------
 // P2PConfig
 
-// P2PConfig defines the configuration options for the Tendermint peer-to-peer networking layer
+// P2PConfig defines the configuration options for the Ostracon peer-to-peer networking layer
 type P2PConfig struct { //nolint: maligned
 	RootDir string `mapstructure:"home"`
 
@@ -576,6 +645,17 @@ type P2PConfig struct { //nolint: maligned
 	HandshakeTimeout time.Duration `mapstructure:"handshake_timeout"`
 	DialTimeout      time.Duration `mapstructure:"dial_timeout"`
 
+	// Reactor async receive
+	RecvAsync bool `mapstructure:"recv_async"`
+
+	// Size of receive buffer used in async receiving
+	PexRecvBufSize        int `mapstructure:"pex_recv_buf_size"`
+	EvidenceRecvBufSize   int `mapstructure:"evidence_recv_buf_size"`
+	MempoolRecvBufSize    int `mapstructure:"mempool_recv_buf_size"`
+	ConsensusRecvBufSize  int `mapstructure:"consensus_recv_buf_size"`
+	BlockchainRecvBufSize int `mapstructure:"blockchain_recv_buf_size"`
+	StatesyncRecvBufSize  int `mapstructure:"statesync_recv_buf_size"`
+
 	// Testing params.
 	// Force dial to fail
 	TestDialFail bool `mapstructure:"test_dial_fail"`
@@ -604,6 +684,13 @@ func DefaultP2PConfig() *P2PConfig {
 		AllowDuplicateIP:             false,
 		HandshakeTimeout:             20 * time.Second,
 		DialTimeout:                  3 * time.Second,
+		RecvAsync:                    true,
+		PexRecvBufSize:               1000,
+		EvidenceRecvBufSize:          1000,
+		MempoolRecvBufSize:           1000,
+		ConsensusRecvBufSize:         4000,
+		BlockchainRecvBufSize:        1000,
+		StatesyncRecvBufSize:         1000,
 		TestDialFail:                 false,
 		TestFuzz:                     false,
 		TestFuzzConfig:               DefaultFuzzConnConfig(),
@@ -674,7 +761,7 @@ func DefaultFuzzConnConfig() *FuzzConnConfig {
 //-----------------------------------------------------------------------------
 // MempoolConfig
 
-// MempoolConfig defines the configuration options for the Tendermint mempool
+// MempoolConfig defines the configuration options for the Ostracon mempool
 type MempoolConfig struct {
 	RootDir   string `mapstructure:"home"`
 	Recheck   bool   `mapstructure:"recheck"`
@@ -701,7 +788,7 @@ type MempoolConfig struct {
 	MaxBatchBytes int `mapstructure:"max_batch_bytes"`
 }
 
-// DefaultMempoolConfig returns a default configuration for the Tendermint mempool
+// DefaultMempoolConfig returns a default configuration for the Ostracon mempool
 func DefaultMempoolConfig() *MempoolConfig {
 	return &MempoolConfig{
 		Recheck:   true,
@@ -716,7 +803,7 @@ func DefaultMempoolConfig() *MempoolConfig {
 	}
 }
 
-// TestMempoolConfig returns a configuration for testing the Tendermint mempool
+// TestMempoolConfig returns a configuration for testing the Ostracon mempool
 func TestMempoolConfig() *MempoolConfig {
 	cfg := DefaultMempoolConfig()
 	cfg.CacheSize = 1000
@@ -754,7 +841,7 @@ func (cfg *MempoolConfig) ValidateBasic() error {
 //-----------------------------------------------------------------------------
 // StateSyncConfig
 
-// StateSyncConfig defines the configuration for the Tendermint state sync service
+// StateSyncConfig defines the configuration for the Ostracon state sync service
 type StateSyncConfig struct {
 	Enable              bool          `mapstructure:"enable"`
 	TempDir             string        `mapstructure:"temp_dir"`
@@ -844,7 +931,7 @@ func (cfg *StateSyncConfig) ValidateBasic() error {
 //-----------------------------------------------------------------------------
 // FastSyncConfig
 
-// FastSyncConfig defines the configuration for the Tendermint fast sync service
+// FastSyncConfig defines the configuration for the Ostracon fast sync service
 type FastSyncConfig struct {
 	Version string `mapstructure:"version"`
 }
@@ -878,7 +965,7 @@ func (cfg *FastSyncConfig) ValidateBasic() error {
 //-----------------------------------------------------------------------------
 // ConsensusConfig
 
-// ConsensusConfig defines the configuration for the Tendermint consensus service,
+// ConsensusConfig defines the configuration for the Ostracon consensus service,
 // including timeouts and details about the WAL and the block structure.
 type ConsensusConfig struct {
 	RootDir string `mapstructure:"home"`
@@ -909,6 +996,9 @@ type ConsensusConfig struct {
 	// EmptyBlocks mode and possible interval between empty blocks
 	CreateEmptyBlocks         bool          `mapstructure:"create_empty_blocks"`
 	CreateEmptyBlocksInterval time.Duration `mapstructure:"create_empty_blocks_interval"`
+
+	// Max transactions per block when creating a block. Not a global configuration. No limit if <= 0.
+	MaxTxs int64 `mapstructure:"max_txs"`
 
 	// Reactor sleep duration parameters
 	PeerGossipSleepDuration     time.Duration `mapstructure:"peer_gossip_sleep_duration"`
@@ -1039,12 +1129,14 @@ func (cfg *ConsensusConfig) ValidateBasic() error {
 	return nil
 }
 
-//-----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // TxIndexConfig
 // Remember that Event has the following structure:
 // type: [
-//  key: value,
-//  ...
+//
+//	key: value,
+//	...
+//
 // ]
 //
 // CompositeKeys are constructed by `type.key`
@@ -1107,7 +1199,7 @@ func DefaultInstrumentationConfig() *InstrumentationConfig {
 		Prometheus:           false,
 		PrometheusListenAddr: ":26660",
 		MaxOpenConnections:   3,
-		Namespace:            "tendermint",
+		Namespace:            "ostracon",
 	}
 }
 

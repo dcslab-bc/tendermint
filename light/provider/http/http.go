@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tendermint/tendermint/light/provider"
-	rpcclient "github.com/tendermint/tendermint/rpc/client"
-	rpchttp "github.com/tendermint/tendermint/rpc/client/http"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/light/provider"
+	rpcclient "github.com/Finschia/ostracon/rpc/client"
+	rpchttp "github.com/Finschia/ostracon/rpc/client/http"
+	"github.com/Finschia/ostracon/types"
 )
 
 var (

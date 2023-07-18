@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tendermint/tendermint/libs/bits"
-	tmjson "github.com/tendermint/tendermint/libs/json"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
+
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/libs/bits"
+	tmjson "github.com/Finschia/ostracon/libs/json"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
 )
 
 const (
@@ -95,6 +97,16 @@ func NewVoteSet(chainID string, height int64, round int32,
 	}
 }
 
+// used only test
+func (voteSet *VoteSet) GetSum() int64 {
+	if voteSet == nil {
+		return 0
+	}
+	voteSet.mtx.Lock()
+	defer voteSet.mtx.Unlock()
+	return voteSet.sum
+}
+
 func (voteSet *VoteSet) ChainID() string {
 	return voteSet.chainID
 }
@@ -147,11 +159,12 @@ func (voteSet *VoteSet) AddVote(vote *Vote) (added bool, err error) {
 	voteSet.mtx.Lock()
 	defer voteSet.mtx.Unlock()
 
-	return voteSet.addVote(vote)
+	return voteSet.addVote(vote, vote.Verify)
 }
 
 // NOTE: Validates as much as possible before attempting to verify the signature.
-func (voteSet *VoteSet) addVote(vote *Vote) (added bool, err error) {
+func (voteSet *VoteSet) addVote(vote *Vote, execVoteVerify func(chainID string,
+	pub crypto.PubKey) (err error)) (added bool, err error) {
 	if vote == nil {
 		return false, ErrVoteNil
 	}
@@ -200,8 +213,13 @@ func (voteSet *VoteSet) addVote(vote *Vote) (added bool, err error) {
 	}
 
 	// Check signature.
-	if err := vote.Verify(voteSet.chainID, val.PubKey); err != nil {
-		return false, fmt.Errorf("failed to verify vote with ChainID %s and PubKey %s: %w", voteSet.chainID, val.PubKey, err)
+	if err := execVoteVerify(voteSet.chainID, val.PubKey); err != nil {
+		return false, fmt.Errorf(
+			"failed to verify vote with ChainID %s and PubKey %s: %w",
+			voteSet.chainID,
+			val.PubKey,
+			err,
+		)
 	}
 
 	// Add vote and get conflicting vote if any.
@@ -629,8 +647,9 @@ func (voteSet *VoteSet) MakeCommit() *Commit {
 		}
 		commitSigs[i] = commitSig
 	}
+	newCommit := NewCommit(voteSet.GetHeight(), voteSet.GetRound(), *voteSet.maj23, commitSigs)
 
-	return NewCommit(voteSet.GetHeight(), voteSet.GetRound(), *voteSet.maj23, commitSigs)
+	return newCommit
 }
 
 //--------------------------------------------------------------------------------

@@ -6,18 +6,19 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/tendermint/tendermint/abci/types"
 	dbm "github.com/tendermint/tm-db"
 
-	"github.com/tendermint/tendermint/abci/example/code"
-	"github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/version"
+	"github.com/Finschia/ostracon/abci/example/code"
+	ocabci "github.com/Finschia/ostracon/abci/types"
+	"github.com/Finschia/ostracon/version"
 )
 
 var (
 	stateKey        = []byte("stateKey")
 	kvPairPrefixKey = []byte("kvPairKey:")
 
-	ProtocolVersion uint64 = 0x1
+	ProtocolVersion uint64 = 99
 )
 
 type State struct {
@@ -61,10 +62,10 @@ func prefixKey(key []byte) []byte {
 
 //---------------------------------------------------
 
-var _ types.Application = (*Application)(nil)
+var _ ocabci.Application = (*Application)(nil)
 
 type Application struct {
-	types.BaseApplication
+	ocabci.BaseApplication
 
 	state        State
 	RetainBlocks int64 // blocks to retain after commit (via ResponseCommit.RetainHeight)
@@ -116,8 +117,16 @@ func (app *Application) DeliverTx(req types.RequestDeliverTx) types.ResponseDeli
 	return types.ResponseDeliverTx{Code: code.CodeTypeOK, Events: events}
 }
 
-func (app *Application) CheckTx(req types.RequestCheckTx) types.ResponseCheckTx {
-	return types.ResponseCheckTx{Code: code.CodeTypeOK, GasWanted: 1}
+func (app *Application) CheckTxSync(req types.RequestCheckTx) ocabci.ResponseCheckTx {
+	return app.checkTx(req)
+}
+
+func (app *Application) CheckTxAsync(req types.RequestCheckTx, callback ocabci.CheckTxCallback) {
+	callback(app.checkTx(req))
+}
+
+func (app *Application) checkTx(req types.RequestCheckTx) ocabci.ResponseCheckTx {
+	return ocabci.ResponseCheckTx{Code: code.CodeTypeOK, GasWanted: 1}
 }
 
 func (app *Application) Commit() types.ResponseCommit {

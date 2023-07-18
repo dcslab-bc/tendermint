@@ -13,42 +13,42 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
+	abci "github.com/tendermint/tendermint/abci/types"
 	dbm "github.com/tendermint/tm-db"
 
-	abci "github.com/tendermint/tendermint/abci/types"
-	bcv0 "github.com/tendermint/tendermint/blockchain/v0"
-	bcv1 "github.com/tendermint/tendermint/blockchain/v1"
-	bcv2 "github.com/tendermint/tendermint/blockchain/v2"
-	cfg "github.com/tendermint/tendermint/config"
-	cs "github.com/tendermint/tendermint/consensus"
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/evidence"
-	tmjson "github.com/tendermint/tendermint/libs/json"
-	"github.com/tendermint/tendermint/libs/log"
-	tmpubsub "github.com/tendermint/tendermint/libs/pubsub"
-	"github.com/tendermint/tendermint/libs/service"
-	"github.com/tendermint/tendermint/light"
-	mempl "github.com/tendermint/tendermint/mempool"
-	"github.com/tendermint/tendermint/p2p"
-	"github.com/tendermint/tendermint/p2p/pex"
-	"github.com/tendermint/tendermint/privval"
-	"github.com/tendermint/tendermint/proxy"
-	rpccore "github.com/tendermint/tendermint/rpc/core"
-	grpccore "github.com/tendermint/tendermint/rpc/grpc"
-	rpcserver "github.com/tendermint/tendermint/rpc/jsonrpc/server"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/state/indexer"
-	blockidxkv "github.com/tendermint/tendermint/state/indexer/block/kv"
-	blockidxnull "github.com/tendermint/tendermint/state/indexer/block/null"
-	"github.com/tendermint/tendermint/state/indexer/sink/psql"
-	"github.com/tendermint/tendermint/state/txindex"
-	"github.com/tendermint/tendermint/state/txindex/kv"
-	"github.com/tendermint/tendermint/state/txindex/null"
-	"github.com/tendermint/tendermint/statesync"
-	"github.com/tendermint/tendermint/store"
-	"github.com/tendermint/tendermint/types"
-	tmtime "github.com/tendermint/tendermint/types/time"
-	"github.com/tendermint/tendermint/version"
+	bcv0 "github.com/Finschia/ostracon/blockchain/v0"
+	bcv1 "github.com/Finschia/ostracon/blockchain/v1"
+	bcv2 "github.com/Finschia/ostracon/blockchain/v2"
+	cfg "github.com/Finschia/ostracon/config"
+	cs "github.com/Finschia/ostracon/consensus"
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/evidence"
+	tmjson "github.com/Finschia/ostracon/libs/json"
+	"github.com/Finschia/ostracon/libs/log"
+	tmpubsub "github.com/Finschia/ostracon/libs/pubsub"
+	"github.com/Finschia/ostracon/libs/service"
+	"github.com/Finschia/ostracon/light"
+	mempl "github.com/Finschia/ostracon/mempool"
+	"github.com/Finschia/ostracon/p2p"
+	"github.com/Finschia/ostracon/p2p/pex"
+	"github.com/Finschia/ostracon/privval"
+	"github.com/Finschia/ostracon/proxy"
+	rpccore "github.com/Finschia/ostracon/rpc/core"
+	grpccore "github.com/Finschia/ostracon/rpc/grpc"
+	rpcserver "github.com/Finschia/ostracon/rpc/jsonrpc/server"
+	sm "github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/state/indexer"
+	blockidxkv "github.com/Finschia/ostracon/state/indexer/block/kv"
+	blockidxnull "github.com/Finschia/ostracon/state/indexer/block/null"
+	"github.com/Finschia/ostracon/state/indexer/sink/psql"
+	"github.com/Finschia/ostracon/state/txindex"
+	"github.com/Finschia/ostracon/state/txindex/kv"
+	"github.com/Finschia/ostracon/state/txindex/null"
+	"github.com/Finschia/ostracon/statesync"
+	"github.com/Finschia/ostracon/store"
+	"github.com/Finschia/ostracon/types"
+	tmtime "github.com/Finschia/ostracon/types/time"
+	"github.com/Finschia/ostracon/version"
 
 	_ "net/http/pprof" // nolint: gosec // securely exposed on separate, optional port
 
@@ -89,7 +89,7 @@ func DefaultGenesisDocProviderFunc(config *cfg.Config) GenesisDocProvider {
 // Provider takes a config and a logger and returns a ready to go Node.
 type Provider func(*cfg.Config, log.Logger) (*Node, error)
 
-// DefaultNewNode returns a Tendermint node with default settings for the
+// DefaultNewNode returns an Ostracon node with default settings for the
 // PrivValidator, ClientCreator, GenesisDoc, and DBProvider.
 // It implements NodeProvider.
 func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
@@ -98,8 +98,35 @@ func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
 		return nil, fmt.Errorf("failed to load or gen node key %s: %w", config.NodeKeyFile(), err)
 	}
 
+	pv := privval.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile())
 	return NewNode(config,
-		privval.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile()),
+		pv,
+		nodeKey,
+		proxy.DefaultClientCreator(config.ProxyApp, config.ABCI, config.DBDir()),
+		DefaultGenesisDocProviderFunc(config),
+		DefaultDBProvider,
+		DefaultMetricsProvider(config.Instrumentation),
+		logger,
+	)
+}
+
+// NewOstraconNode returns an Ostracon node for more safe production environments that don't automatically generate
+// critical files. This function doesn't reference local key pair in configurations using KMS.
+func NewOstraconNode(config *cfg.Config, logger log.Logger) (*Node, error) {
+	nodeKey, err := p2p.LoadNodeKey(config.NodeKeyFile())
+	if err != nil {
+		return nil, fmt.Errorf("failed to load node key %s: %w", config.NodeKeyFile(), err)
+	}
+
+	var privKey types.PrivValidator
+	if config.PrivValidatorListenAddr == "" {
+		privKey = privval.LoadFilePV(
+			config.PrivValidatorKeyFile(),
+			config.PrivValidatorStateFile())
+	}
+	return NewNode(
+		config,
+		privKey,
 		nodeKey,
 		proxy.DefaultClientCreator(config.ProxyApp, config.ABCI, config.DBDir()),
 		DefaultGenesisDocProviderFunc(config),
@@ -141,12 +168,12 @@ type fastSyncReactor interface {
 // WARNING: using any name from the below list of the existing reactors will
 // result in replacing it with the custom one.
 //
-//  - MEMPOOL
-//  - BLOCKCHAIN
-//  - CONSENSUS
-//  - EVIDENCE
-//  - PEX
-//  - STATESYNC
+//   - MEMPOOL
+//   - BLOCKCHAIN
+//   - CONSENSUS
+//   - EVIDENCE
+//   - PEX
+//   - STATESYNC
 func CustomReactors(reactors map[string]p2p.Reactor) Option {
 	return func(n *Node) {
 		for name, reactor := range reactors {
@@ -164,7 +191,10 @@ func CustomReactors(reactors map[string]p2p.Reactor) Option {
 				for _, chDesc := range reactor.GetChannels() {
 					if !ni.HasChannel(chDesc.ID) {
 						ni.Channels = append(ni.Channels, chDesc.ID)
-						n.transport.AddChannel(chDesc.ID)
+						err := n.transport.AddChannel(chDesc.ID)
+						if err != nil {
+							n.Logger.Debug("AddChannel failed", "err", err)
+						}
 					}
 				}
 				n.nodeInfo = ni
@@ -175,18 +205,9 @@ func CustomReactors(reactors map[string]p2p.Reactor) Option {
 	}
 }
 
-// StateProvider overrides the state provider used by state sync to retrieve trusted app hashes and
-// build a State object for bootstrapping the node.
-// WARNING: this interface is considered unstable and subject to change.
-func StateProvider(stateProvider statesync.StateProvider) Option {
-	return func(n *Node) {
-		n.stateSyncProvider = stateProvider
-	}
-}
-
 //------------------------------------------------------------------------------
 
-// Node is the highest level interface to a full Tendermint node.
+// Node is the highest level interface to a full Ostracon node.
 // It includes all configuration information and running services.
 type Node struct {
 	service.BaseService
@@ -331,8 +352,10 @@ func doHandshake(
 func logNodeStartupInfo(state sm.State, pubKey crypto.PubKey, logger, consensusLogger log.Logger) {
 	// Log the version info.
 	logger.Info("Version info",
-		"tendermint_version", version.TMCoreSemVer,
-		"block", version.BlockProtocol,
+		"software", version.OCCoreSemVer,
+		"abci", version.ABCIVersion,
+		"app", state.Version.Consensus.App,
+		"block", state.Version.Consensus.Block,
 		"p2p", version.P2PProtocol,
 	)
 
@@ -373,7 +396,7 @@ func createMempoolAndMempoolReactor(config *cfg.Config, proxyApp proxy.AppConns,
 		mempl.WithPostCheck(sm.TxPostCheck(state)),
 	)
 	mempoolLogger := logger.With("module", "mempool")
-	mempoolReactor := mempl.NewReactor(config.Mempool, mempool)
+	mempoolReactor := mempl.NewReactor(config.Mempool, config.P2P.RecvAsync, config.P2P.MempoolRecvBufSize, mempool)
 	mempoolReactor.SetLogger(mempoolLogger)
 
 	if config.Consensus.WaitForTxs() {
@@ -394,7 +417,7 @@ func createEvidenceReactor(config *cfg.Config, dbProvider DBProvider,
 	if err != nil {
 		return nil, nil, err
 	}
-	evidenceReactor := evidence.NewReactor(evidencePool)
+	evidenceReactor := evidence.NewReactor(evidencePool, config.P2P.RecvAsync, config.P2P.EvidenceRecvBufSize)
 	evidenceReactor.SetLogger(evidenceLogger)
 	return evidenceReactor, evidencePool, nil
 }
@@ -408,9 +431,11 @@ func createBlockchainReactor(config *cfg.Config,
 
 	switch config.FastSync.Version {
 	case "v0":
-		bcReactor = bcv0.NewBlockchainReactor(state.Copy(), blockExec, blockStore, fastSync)
+		bcReactor = bcv0.NewBlockchainReactor(state.Copy(), blockExec, blockStore, fastSync,
+			config.P2P.RecvAsync, config.P2P.BlockchainRecvBufSize)
 	case "v1":
-		bcReactor = bcv1.NewBlockchainReactor(state.Copy(), blockExec, blockStore, fastSync)
+		bcReactor = bcv1.NewBlockchainReactor(state.Copy(), blockExec, blockStore, fastSync,
+			config.P2P.RecvAsync, config.P2P.BlockchainRecvBufSize)
 	case "v2":
 		bcReactor = bcv2.NewBlockchainReactor(state.Copy(), blockExec, blockStore, fastSync)
 	default:
@@ -446,7 +471,8 @@ func createConsensusReactor(config *cfg.Config,
 	if privValidator != nil {
 		consensusState.SetPrivValidator(privValidator)
 	}
-	consensusReactor := cs.NewReactor(consensusState, waitSync, cs.ReactorMetrics(csMetrics))
+	consensusReactor := cs.NewReactor(consensusState, waitSync, config.P2P.RecvAsync, config.P2P.ConsensusRecvBufSize,
+		cs.ReactorMetrics(csMetrics))
 	consensusReactor.SetLogger(consensusLogger)
 	// services which will be publishing and/or subscribing for messages (events)
 	// consensusReactor will set it on consensusState and blockExecutor
@@ -588,6 +614,7 @@ func createPEXReactorAndAddToSwitch(addrBook pex.AddrBook, config *cfg.Config,
 
 	// TODO persistent peers ? so we can have their DNS addrs saved
 	pexReactor := pex.NewReactor(addrBook,
+		config.P2P.RecvAsync,
 		&pex.ReactorConfig{
 			Seeds:    splitAndTrimEmpty(config.P2P.Seeds, ",", " "),
 			SeedMode: config.P2P.SeedMode,
@@ -598,6 +625,7 @@ func createPEXReactorAndAddToSwitch(addrBook pex.AddrBook, config *cfg.Config,
 			// https://github.com/tendermint/tendermint/issues/3523
 			SeedDisconnectWaitPeriod:     28 * time.Hour,
 			PersistentPeersMaxDialPeriod: config.P2P.PersistentPeersMaxDialPeriod,
+			RecvBufSize:                  config.P2P.PexRecvBufSize,
 		})
 	pexReactor.SetLogger(logger.With("module", "pex"))
 	sw.AddReactor("PEX", pexReactor)
@@ -628,10 +656,17 @@ func startStateSync(ssR *statesync.Reactor, bcR fastSyncReactor, conR *cs.Reacto
 	}
 
 	go func() {
-		state, commit, err := ssR.Sync(stateProvider, config.DiscoveryTime)
+		state, previousState, commit, err := ssR.Sync(stateProvider, config.DiscoveryTime)
 		if err != nil {
 			ssR.Logger.Error("State sync failed", "err", err)
 			return
+		}
+		if previousState.LastBlockHeight > 0 {
+			err = stateStore.Bootstrap(previousState)
+			if err != nil {
+				ssR.Logger.Error("Failed to bootstrap node with previous state", "err", err)
+				return
+			}
 		}
 		err = stateStore.Bootstrap(state)
 		if err != nil {
@@ -660,7 +695,7 @@ func startStateSync(ssR *statesync.Reactor, bcR fastSyncReactor, conR *cs.Reacto
 	return nil
 }
 
-// NewNode returns a new, ready to go, Tendermint Node.
+// NewNode returns a new, ready to go, Ostracon Node.
 func NewNode(config *cfg.Config,
 	privValidator types.PrivValidator,
 	nodeKey *p2p.NodeKey,
@@ -708,7 +743,7 @@ func NewNode(config *cfg.Config,
 	// external signing process.
 	if config.PrivValidatorListenAddr != "" {
 		// FIXME: we should start services inside OnStart
-		privValidator, err = createAndStartPrivValidatorSocketClient(config.PrivValidatorListenAddr, genDoc.ChainID, logger)
+		privValidator, err = CreateAndStartPrivValidatorSocketClient(config.PrivValidatorListenAddr, genDoc.ChainID, logger)
 		if err != nil {
 			return nil, fmt.Errorf("error with private validator socket client: %w", err)
 		}
@@ -727,7 +762,7 @@ func NewNode(config *cfg.Config,
 	}
 
 	// Create the handshaker, which calls RequestInfo, sets the AppVersion on the state,
-	// and replays any blocks as necessary to sync tendermint with the app.
+	// and replays any blocks as necessary to sync ostracon with the app.
 	consensusLogger := logger.With("module", "consensus")
 	if !stateSync {
 		if err := doHandshake(stateStore, state, blockStore, genDoc, eventBus, proxyApp, consensusLogger); err != nil {
@@ -796,8 +831,8 @@ func NewNode(config *cfg.Config,
 		*config.StateSync,
 		proxyApp.Snapshot(),
 		proxyApp.Query(),
-		config.StateSync.TempDir,
-	)
+		config.P2P.RecvAsync,
+		config.P2P.StatesyncRecvBufSize)
 	stateSyncReactor.SetLogger(logger.With("module", "statesync"))
 
 	nodeInfo, err := makeNodeInfo(config, nodeKey, txIndexer, genDoc, state)
@@ -1079,6 +1114,9 @@ func (n *Node) startRPC() ([]net.Listener, error) {
 	config.MaxBodyBytes = n.config.RPC.MaxBodyBytes
 	config.MaxHeaderBytes = n.config.RPC.MaxHeaderBytes
 	config.MaxOpenConnections = n.config.RPC.MaxOpenConnections
+	config.ReadTimeout = n.config.RPC.ReadTimeout
+	config.WriteTimeout = n.config.RPC.WriteTimeout
+	config.IdleTimeout = n.config.RPC.IdleTimeout
 	// If necessary adjust global WriteTimeout to ensure it's greater than
 	// TimeoutBroadcastTxCommit.
 	// See https://github.com/tendermint/tendermint/issues/3435
@@ -1318,7 +1356,7 @@ func makeNodeInfo(
 		),
 		DefaultNodeID: nodeKey.ID(),
 		Network:       genDoc.ChainID,
-		Version:       version.TMCoreSemVer,
+		Version:       version.OCCoreSemVer,
 		Channels: []byte{
 			bcChannel,
 			cs.StateChannel, cs.DataChannel, cs.VoteChannel, cs.VoteSetBitsChannel,
@@ -1385,13 +1423,23 @@ func LoadStateFromDBOrGenesisDocProvider(
 
 // panics if failed to unmarshal bytes
 func loadGenesisDoc(db dbm.DB) (*types.GenesisDoc, error) {
-	b, err := db.Get(genesisDocKey)
+	var b []byte
+	iter, err := db.Iterator(append(genesisDocKey, byte(0)), append(genesisDocKey, byte(255)))
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
+
+	for ; iter.Valid(); iter.Next() {
+		b = append(b, iter.Value()...)
+	}
+	if err = iter.Close(); err != nil {
+		return nil, err
+	}
+
 	if len(b) == 0 {
 		return nil, errors.New("genesis doc not found")
 	}
+
 	var genDoc *types.GenesisDoc
 	err = tmjson.Unmarshal(b, &genDoc)
 	if err != nil {
@@ -1406,14 +1454,34 @@ func saveGenesisDoc(db dbm.DB, genDoc *types.GenesisDoc) error {
 	if err != nil {
 		return fmt.Errorf("failed to save genesis doc due to marshaling error: %w", err)
 	}
-	if err := db.SetSync(genesisDocKey, b); err != nil {
+
+	blockSize := 100000000 // 100mb
+	blocks := make([][]byte, 0)
+	for i := 0; i < len(b); i += blockSize {
+		end := i + blockSize
+		if end > len(b) {
+			end = len(b)
+		}
+		blocks = append(blocks, b[i:end])
+	}
+
+	batch := db.NewBatch()
+	for i, block := range blocks {
+		k := append(genesisDocKey, byte(i))
+		err = batch.Set(k, block)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err = batch.WriteSync(); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func createAndStartPrivValidatorSocketClient(
+func CreateAndStartPrivValidatorSocketClient(
 	listenAddr,
 	chainID string,
 	logger log.Logger,

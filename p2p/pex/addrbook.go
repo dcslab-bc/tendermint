@@ -5,7 +5,6 @@
 package pex
 
 import (
-	crand "crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -16,12 +15,12 @@ import (
 
 	"github.com/minio/highwayhash"
 
-	"github.com/tendermint/tendermint/crypto"
-	tmmath "github.com/tendermint/tendermint/libs/math"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
-	"github.com/tendermint/tendermint/libs/service"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
-	"github.com/tendermint/tendermint/p2p"
+	"github.com/Finschia/ostracon/crypto"
+	tmmath "github.com/Finschia/ostracon/libs/math"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
+	"github.com/Finschia/ostracon/libs/service"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
+	"github.com/Finschia/ostracon/p2p"
 )
 
 const (
@@ -109,9 +108,7 @@ type addrBook struct {
 }
 
 func newHashKey() []byte {
-	result := make([]byte, highwayhash.Size)
-	crand.Read(result) //nolint:errcheck // ignore error
-	return result
+	return crypto.CRandBytes(highwayhash.Size)
 }
 
 // NewAddrBook creates a new address book.
@@ -229,8 +226,12 @@ func (a *addrBook) RemoveAddress(addr *p2p.NetAddress) {
 func (a *addrBook) IsGood(addr *p2p.NetAddress) bool {
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
+	ka, ok := a.addrLookup[addr.ID]
+	if !ok || ka == nil {
+		return false
+	}
 
-	return a.addrLookup[addr.ID].isOld()
+	return ka.isOld()
 }
 
 // IsBanned returns true if the peer is currently banned

@@ -5,11 +5,13 @@ import (
 	"time"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/libs/bytes"
-	"github.com/tendermint/tendermint/p2p"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	"github.com/tendermint/tendermint/types"
+
+	ocabci "github.com/Finschia/ostracon/abci/types"
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/libs/bytes"
+	"github.com/Finschia/ostracon/p2p"
+	"github.com/Finschia/ostracon/types"
 )
 
 // List of blocks
@@ -132,7 +134,7 @@ type Peer struct {
 	RemoteIP         string               `json:"remote_ip"`
 }
 
-// Validators for a height.
+// ResultValidators for a height
 type ResultValidators struct {
 	BlockHeight int64              `json:"block_height"`
 	Validators  []*types.Validator `json:"validators"`
@@ -168,25 +170,26 @@ type ResultConsensusState struct {
 
 // CheckTx result
 type ResultBroadcastTx struct {
-	Code      uint32         `json:"code"`
-	Data      bytes.HexBytes `json:"data"`
-	Log       string         `json:"log"`
-	Codespace string         `json:"codespace"`
+	Code         uint32         `json:"code"`
+	Data         bytes.HexBytes `json:"data"`
+	Log          string         `json:"log"`
+	Codespace    string         `json:"codespace"`
+	MempoolError string         `json:"mempool_error"`
 
 	Hash bytes.HexBytes `json:"hash"`
 }
 
 // CheckTx and DeliverTx results
 type ResultBroadcastTxCommit struct {
-	CheckTx   abci.ResponseCheckTx   `json:"check_tx"`
+	CheckTx   ocabci.ResponseCheckTx `json:"check_tx"`
 	DeliverTx abci.ResponseDeliverTx `json:"deliver_tx"`
 	Hash      bytes.HexBytes         `json:"hash"`
 	Height    int64                  `json:"height"`
 }
 
-// ResultCheckTx wraps abci.ResponseCheckTx.
+// ResultCheckTx wraps ocabci.ResponseCheckTx.
 type ResultCheckTx struct {
-	abci.ResponseCheckTx
+	ocabci.ResponseCheckTx
 }
 
 // Result of querying for a tx
@@ -246,6 +249,6 @@ type (
 // Event data from a subscription
 type ResultEvent struct {
 	Query  string              `json:"query"`
-	Data   types.TMEventData   `json:"data"`
+	Data   types.OCEventData   `json:"data"`
 	Events map[string][]string `json:"events"`
 }

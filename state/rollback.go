@@ -6,10 +6,11 @@ import (
 
 	tmstate "github.com/tendermint/tendermint/proto/tendermint/state"
 	tmversion "github.com/tendermint/tendermint/proto/tendermint/version"
-	"github.com/tendermint/tendermint/version"
+
+	"github.com/Finschia/ostracon/version"
 )
 
-// Rollback overwrites the current Tendermint state (height n) with the most
+// Rollback overwrites the current Ostracon state (height n) with the most
 // recent previous state (height n - 1).
 // Note that this function does not affect application state.
 func Rollback(bs BlockStore, ss Store) (int64, []byte, error) {
@@ -41,16 +42,21 @@ func Rollback(bs BlockStore, ss Store) (int64, []byte, error) {
 	rollbackHeight := invalidState.LastBlockHeight - 1
 	rollbackBlock := bs.LoadBlockMeta(rollbackHeight)
 	if rollbackBlock == nil {
-		return -1, nil, fmt.Errorf("block at height %d not found", rollbackHeight)
+		return -1, nil, fmt.Errorf("block at RollbackHeight %d not found", rollbackHeight)
 	}
 	// We also need to retrieve the latest block because the app hash and last
 	// results hash is only agreed upon in the following block.
 	latestBlock := bs.LoadBlockMeta(invalidState.LastBlockHeight)
 	if latestBlock == nil {
-		return -1, nil, fmt.Errorf("block at height %d not found", invalidState.LastBlockHeight)
+		return -1, nil, fmt.Errorf("block at LastBlockHeight %d not found", invalidState.LastBlockHeight)
 	}
 
 	previousLastValidatorSet, err := ss.LoadValidators(rollbackHeight)
+	if err != nil {
+		return -1, nil, err
+	}
+
+	currProofHash, err := ss.LoadProofHash(rollbackHeight + 1)
 	if err != nil {
 		return -1, nil, err
 	}
@@ -79,7 +85,7 @@ func Rollback(bs BlockStore, ss Store) (int64, []byte, error) {
 				Block: version.BlockProtocol,
 				App:   previousParams.Version.AppVersion,
 			},
-			Software: version.TMCoreSemVer,
+			Software: version.OCCoreSemVer,
 		},
 		// immutable fields
 		ChainID:       invalidState.ChainID,
@@ -92,6 +98,7 @@ func Rollback(bs BlockStore, ss Store) (int64, []byte, error) {
 		NextValidators:              invalidState.Validators,
 		Validators:                  invalidState.LastValidators,
 		LastValidators:              previousLastValidatorSet,
+		LastProofHash:               currProofHash,
 		LastHeightValidatorsChanged: valChangeHeight,
 
 		ConsensusParams:                  previousParams,

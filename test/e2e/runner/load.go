@@ -8,9 +8,10 @@ import (
 	"math"
 	"time"
 
-	rpchttp "github.com/tendermint/tendermint/rpc/client/http"
-	e2e "github.com/tendermint/tendermint/test/e2e/pkg"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/libs/log"
+	rpchttp "github.com/Finschia/ostracon/rpc/client/http"
+	e2e "github.com/Finschia/ostracon/test/e2e/pkg"
+	"github.com/Finschia/ostracon/types"
 )
 
 // Load generates transactions against the network until the given context is
@@ -58,7 +59,7 @@ func Load(ctx context.Context, testnet *e2e.Testnet, multiplier int) error {
 			if success == 0 {
 				return errors.New("failed to submit any transactions")
 			}
-			logger.Info(fmt.Sprintf("Ending transaction load after %v txs (%.1f tx/s)...",
+			logger.Info("load", "msg", log.NewLazySprintf("Ending transaction load after %v txs (%.1f tx/s)...",
 				success, float64(success)/time.Since(started).Seconds()))
 			return nil
 		}

@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tendermint/tendermint/light/provider"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/light/provider"
+	"github.com/Finschia/ostracon/types"
 )
 
 type Mock struct {
@@ -26,7 +26,11 @@ var _ provider.Provider = (*Mock)(nil)
 
 // New creates a mock provider with the given set of headers and validator
 // sets.
-func New(chainID string, headers map[int64]*types.SignedHeader, vals map[int64]*types.ValidatorSet) *Mock {
+func New(
+	chainID string,
+	headers map[int64]*types.SignedHeader,
+	vals map[int64]*types.ValidatorSet,
+) *Mock {
 	height := int64(0)
 	for h := range headers {
 		if h > height {

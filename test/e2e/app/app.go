@@ -8,21 +8,26 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
-	"github.com/tendermint/tendermint/abci/example/code"
 	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/libs/log"
-	"github.com/tendermint/tendermint/version"
+	"github.com/tendermint/tendermint/proto/tendermint/crypto"
+
+	"github.com/Finschia/ostracon/abci/example/code"
+	ocabci "github.com/Finschia/ostracon/abci/types"
+	cryptoenc "github.com/Finschia/ostracon/crypto/encoding"
+	"github.com/Finschia/ostracon/libs/log"
+	"github.com/Finschia/ostracon/version"
 )
 
-const appVersion = 1
+const E2EAppVersion = 999
 
 // Application is an ABCI application for use by end-to-end tests. It is a
 // simple key/value store for strings, storing data in memory and persisting
 // to disk as JSON, taking state sync snapshots if requested.
 
 type Application struct {
-	abci.BaseApplication
+	ocabci.BaseApplication
 	logger          log.Logger
 	state           *State
 	snapshots       *SnapshotStore
@@ -34,7 +39,7 @@ type Application struct {
 // Config allows for the setting of high level parameters for running the e2e Application
 // KeyType and ValidatorUpdates must be the same for all nodes running the same application.
 type Config struct {
-	// The directory with which state.json will be persisted in. Usually $HOME/.tendermint/data
+	// The directory with which state.json will be persisted in. Usually $HOME/.ostracon/data
 	Dir string `toml:"dir"`
 
 	// SnapshotInterval specifies the height interval at which the application
@@ -70,6 +75,13 @@ type Config struct {
 	//
 	// height <-> pubkey <-> voting power
 	ValidatorUpdates map[string]map[string]uint8 `toml:"validator_update"`
+
+	// Add artificial delays to each of the main ABCI calls to mimic computation time
+	// of the application
+	PrepareProposalDelay time.Duration `toml:"prepare_proposal_delay"`
+	ProcessProposalDelay time.Duration `toml:"process_proposal_delay"`
+	CheckTxDelay         time.Duration `toml:"check_tx_delay"`
+	// TODO: add vote extension and finalize block delays once completed (@cmwaters)
 }
 
 func DefaultConfig(dir string) *Config {
@@ -91,7 +103,7 @@ func NewApplication(cfg *Config) (*Application, error) {
 		return nil, err
 	}
 	return &Application{
-		logger:    log.NewTMLogger(log.NewSyncWriter(os.Stdout)),
+		logger:    log.NewOCLogger(log.NewSyncWriter(os.Stdout)),
 		state:     state,
 		snapshots: snapshots,
 		cfg:       cfg,
@@ -102,7 +114,7 @@ func NewApplication(cfg *Config) (*Application, error) {
 func (app *Application) Info(req abci.RequestInfo) abci.ResponseInfo {
 	return abci.ResponseInfo{
 		Version:          version.ABCIVersion,
-		AppVersion:       appVersion,
+		AppVersion:       E2EAppVersion,
 		LastBlockHeight:  int64(app.state.Height),
 		LastBlockAppHash: app.state.Hash,
 	}
@@ -128,15 +140,20 @@ func (app *Application) InitChain(req abci.RequestInitChain) abci.ResponseInitCh
 }
 
 // CheckTx implements ABCI.
-func (app *Application) CheckTx(req abci.RequestCheckTx) abci.ResponseCheckTx {
+func (app *Application) CheckTx(req abci.RequestCheckTx) ocabci.ResponseCheckTx {
 	_, _, err := parseTx(req.Tx)
 	if err != nil {
-		return abci.ResponseCheckTx{
+		return ocabci.ResponseCheckTx{
 			Code: code.CodeTypeEncodingError,
 			Log:  err.Error(),
 		}
 	}
-	return abci.ResponseCheckTx{Code: code.CodeTypeOK, GasWanted: 1}
+
+	if app.cfg.CheckTxDelay != 0 {
+		time.Sleep(app.cfg.CheckTxDelay)
+	}
+
+	return ocabci.ResponseCheckTx{Code: code.CodeTypeOK, GasWanted: 1}
 }
 
 // DeliverTx implements ABCI.
@@ -262,20 +279,29 @@ func (app *Application) Rollback() error {
 }
 
 // validatorUpdates generates a validator set update.
-func (app *Application) validatorUpdates(height uint64) (abci.ValidatorUpdates, error) {
+func (app *Application) validatorUpdates(height uint64) (ocabci.ValidatorUpdates, error) {
 	updates := app.cfg.ValidatorUpdates[fmt.Sprintf("%v", height)]
 	if len(updates) == 0 {
 		return nil, nil
 	}
 
-	valUpdates := abci.ValidatorUpdates{}
+	valUpdates := ocabci.ValidatorUpdates{}
 	for keyString, power := range updates {
 
 		keyBytes, err := base64.StdEncoding.DecodeString(keyString)
 		if err != nil {
-			return nil, fmt.Errorf("invalid base64 pubkey value %q: %w", keyString, err)
+			return nil, fmt.Errorf("invalid base64.enc pubkey %q: %w", keyString, err)
 		}
-		valUpdates = append(valUpdates, abci.UpdateValidator(keyBytes, int64(power), app.cfg.KeyType))
+		pubKeyProto := crypto.PublicKey{}
+		err = pubKeyProto.Unmarshal(keyBytes)
+		if err != nil {
+			return nil, fmt.Errorf("invalid marshalled pubkey %q: %w", keyString, err)
+		}
+		pubKey, err := cryptoenc.PubKeyFromProto(&pubKeyProto)
+		if err != nil {
+			return nil, fmt.Errorf("invalid crypto pubkey %q: %w", keyString, err)
+		}
+		valUpdates = append(valUpdates, ocabci.NewValidatorUpdate(pubKey, int64(power)))
 	}
 	return valUpdates, nil
 }

@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tendermint/tendermint/light/provider"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/light/provider"
+	"github.com/Finschia/ostracon/types"
 )
 
 // The detector component of the light client detects and handles attacks on the light client.

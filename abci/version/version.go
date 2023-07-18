@@ -1,7 +1,7 @@
 package version
 
 import (
-	"github.com/tendermint/tendermint/version"
+	"github.com/Finschia/ostracon/version"
 )
 
 // TODO: eliminate this after some version refactor

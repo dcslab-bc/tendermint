@@ -8,19 +8,20 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	dbm "github.com/tendermint/tm-db"
-
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/crypto/tmhash"
-	"github.com/tendermint/tendermint/evidence"
-	"github.com/tendermint/tendermint/evidence/mocks"
-	"github.com/tendermint/tendermint/libs/log"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	tmversion "github.com/tendermint/tendermint/proto/tendermint/version"
-	sm "github.com/tendermint/tendermint/state"
-	smmocks "github.com/tendermint/tendermint/state/mocks"
-	"github.com/tendermint/tendermint/types"
-	"github.com/tendermint/tendermint/version"
+	dbm "github.com/tendermint/tm-db"
+
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/crypto/tmhash"
+	"github.com/Finschia/ostracon/evidence"
+	"github.com/Finschia/ostracon/evidence/mocks"
+	"github.com/Finschia/ostracon/libs/log"
+	"github.com/Finschia/ostracon/light"
+	sm "github.com/Finschia/ostracon/state"
+	smmocks "github.com/Finschia/ostracon/state/mocks"
+	"github.com/Finschia/ostracon/types"
+	"github.com/Finschia/ostracon/version"
 )
 
 const (
@@ -62,6 +63,64 @@ func TestVerifyLightClientAttack_Lunatic(t *testing.T) {
 	err = evidence.VerifyLightClientAttack(ev, common.SignedHeader, trusted.SignedHeader, common.ValidatorSet,
 		defaultEvidenceTime.Add(2*time.Hour), 3*time.Hour)
 	assert.Error(t, err)
+}
+
+func TestVerifyLightClientAttack_validateABCIEvidence(t *testing.T) {
+	const (
+		height             = int64(10)
+		commonHeight int64 = 4
+		totalVals          = 10
+		byzVals            = 4
+		votingPower        = defaultVotingPower
+	)
+	attackTime := defaultEvidenceTime.Add(1 * time.Hour)
+	// create valid lunatic evidence
+	ev, trusted, common := makeLunaticEvidence(
+		t, height, commonHeight, totalVals, byzVals, totalVals-byzVals, defaultEvidenceTime, attackTime)
+	require.NoError(t, ev.ValidateBasic())
+
+	// good pass -> no error
+	err := evidence.VerifyLightClientAttack(ev, common.SignedHeader, trusted.SignedHeader, common.ValidatorSet,
+		defaultEvidenceTime.Add(2*time.Hour), 3*time.Hour)
+	assert.NoError(t, err)
+
+	// illegal nil validators
+	validator, _ := types.RandValidator(false, votingPower)
+	ev.ByzantineValidators = []*types.Validator{validator}
+	amnesiaHeader, err := types.SignedHeaderFromProto(ev.ConflictingBlock.SignedHeader.ToProto())
+	require.NoError(t, err)
+	amnesiaHeader.ProposerAddress = nil
+	amnesiaHeader.Commit.Round = 2
+	err = evidence.VerifyLightClientAttack(ev, common.SignedHeader, amnesiaHeader, common.ValidatorSet, // illegal header
+		defaultEvidenceTime.Add(2*time.Hour), 3*time.Hour)
+	require.Error(t, err)
+	require.Equal(t, "expected nil validators from an amnesia light client attack but got 1", err.Error())
+
+	// illegal byzantine validators
+	equivocationHeader, err := types.SignedHeaderFromProto(ev.ConflictingBlock.SignedHeader.ToProto())
+	require.NoError(t, err)
+	equivocationHeader.ProposerAddress = nil
+	err = evidence.VerifyLightClientAttack(ev, common.SignedHeader, equivocationHeader, common.ValidatorSet, // illegal header
+		defaultEvidenceTime.Add(2*time.Hour), 3*time.Hour)
+	require.Error(t, err)
+	require.Equal(t, "expected 10 byzantine validators from evidence but got 1", err.Error())
+
+	// illegal byzantine validator address
+	phantomValidatorSet, _ := types.RandValidatorSet(totalVals, defaultVotingPower)
+	ev.ByzantineValidators = phantomValidatorSet.Validators
+	err = evidence.VerifyLightClientAttack(ev, common.SignedHeader, equivocationHeader, common.ValidatorSet,
+		defaultEvidenceTime.Add(2*time.Hour), 3*time.Hour)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "evidence contained an unexpected byzantine validator address;")
+
+	// illegal byzantine validator voting power
+	phantomValidatorSet = ev.ConflictingBlock.ValidatorSet.Copy()
+	phantomValidatorSet.Validators[0].VotingPower = votingPower + 1
+	ev.ByzantineValidators = phantomValidatorSet.Validators
+	err = evidence.VerifyLightClientAttack(ev, common.SignedHeader, equivocationHeader, common.ValidatorSet,
+		defaultEvidenceTime.Add(2*time.Hour), 3*time.Hour)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "evidence contained unexpected byzantine validator voting power;")
 }
 
 func TestVerify_LunaticAttackAgainstState(t *testing.T) {
@@ -482,6 +541,8 @@ func makeLunaticEvidence(
 	voteSet := types.NewVoteSet(evidenceChainID, height, 1, tmproto.SignedMsgType(2), conflictingVals)
 	commit, err := types.MakeCommit(blockID, height, 1, voteSet, conflictingPrivVals, defaultEvidenceTime)
 	require.NoError(t, err)
+	err = conflictingVals.VerifyCommitLightTrusting(evidenceChainID, commit, light.DefaultTrustLevel)
+	require.NoError(t, err)
 	ev = &types.LightClientAttackEvidence{
 		ConflictingBlock: &types.LightBlock{
 			SignedHeader: &types.SignedHeader{
@@ -506,8 +567,11 @@ func makeLunaticEvidence(
 	}
 	trustedBlockID := makeBlockID(trustedHeader.Hash(), 1000, []byte("partshash"))
 	trustedVals, privVals := types.RandValidatorSet(totalVals, defaultVotingPower)
+	privVals = orderPrivValsByValSet(t, trustedVals, privVals)
 	trustedVoteSet := types.NewVoteSet(evidenceChainID, height, 1, tmproto.SignedMsgType(2), trustedVals)
 	trustedCommit, err := types.MakeCommit(trustedBlockID, height, 1, trustedVoteSet, privVals, defaultEvidenceTime)
+	require.NoError(t, err)
+	err = trustedVals.VerifyCommitLightTrusting(evidenceChainID, trustedCommit, light.DefaultTrustLevel)
 	require.NoError(t, err)
 	trusted = &types.LightBlock{
 		SignedHeader: &types.SignedHeader{
@@ -540,6 +604,7 @@ func makeVote(
 		Type:             tmproto.SignedMsgType(step),
 		BlockID:          blockID,
 		Timestamp:        time,
+		Signature:        []byte{},
 	}
 
 	vpb := v.ToProto()
@@ -553,7 +618,7 @@ func makeVote(
 
 func makeHeaderRandom(height int64) *types.Header {
 	return &types.Header{
-		Version:            tmversion.Consensus{Block: version.BlockProtocol, App: 1},
+		Version:            tmversion.Consensus{Block: version.BlockProtocol, App: version.AppProtocol},
 		ChainID:            evidenceChainID,
 		Height:             height,
 		Time:               defaultEvidenceTime,

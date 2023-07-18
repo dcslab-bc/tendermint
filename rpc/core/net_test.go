@@ -6,15 +6,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	cfg "github.com/tendermint/tendermint/config"
-	"github.com/tendermint/tendermint/libs/log"
-	"github.com/tendermint/tendermint/p2p"
-	rpctypes "github.com/tendermint/tendermint/rpc/jsonrpc/types"
+	cfg "github.com/Finschia/ostracon/config"
+	"github.com/Finschia/ostracon/libs/log"
+	"github.com/Finschia/ostracon/p2p"
+	rpctypes "github.com/Finschia/ostracon/rpc/jsonrpc/types"
 )
 
 func TestUnsafeDialSeeds(t *testing.T) {
 	sw := p2p.MakeSwitch(cfg.DefaultP2PConfig(), 1, "testing", "123.123.123",
-		func(n int, sw *p2p.Switch) *p2p.Switch { return sw })
+		func(n int, sw *p2p.Switch, config *cfg.P2PConfig) *p2p.Switch { return sw })
 	err := sw.Start()
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -48,7 +48,7 @@ func TestUnsafeDialSeeds(t *testing.T) {
 
 func TestUnsafeDialPeers(t *testing.T) {
 	sw := p2p.MakeSwitch(cfg.DefaultP2PConfig(), 1, "testing", "123.123.123",
-		func(n int, sw *p2p.Switch) *p2p.Switch { return sw })
+		func(n int, sw *p2p.Switch, config *cfg.P2PConfig) *p2p.Switch { return sw })
 	sw.SetAddrBook(&p2p.AddrBookMock{
 		Addrs:        make(map[string]struct{}),
 		OurAddrs:     make(map[string]struct{}),
@@ -84,4 +84,58 @@ func TestUnsafeDialPeers(t *testing.T) {
 			assert.NotNil(t, res)
 		}
 	}
+}
+
+func TestGenesis(t *testing.T) {
+	env = &Environment{}
+
+	// success
+	env.genChunks = []string{}
+	res, err := Genesis(&rpctypes.Context{})
+	assert.NoError(t, err)
+	assert.NotNil(t, res)
+
+	// error
+	env.genChunks = []string{"", ""}
+	res, err = Genesis(&rpctypes.Context{})
+	assert.Error(t, err)
+	assert.Equal(t, "genesis response is large, please use the genesis_chunked API instead", err.Error())
+	assert.Nil(t, res)
+}
+
+func TestGenesisChunked(t *testing.T) {
+	env = &Environment{}
+
+	// success
+	env.genChunks = []string{""}
+	chunk := uint(0)
+	res, err := GenesisChunked(&rpctypes.Context{}, chunk)
+	assert.NoError(t, err)
+	assert.NotNil(t, res)
+
+	//
+	// errors
+	//
+
+	env.genChunks = nil
+	chunk = uint(0)
+	res, err = GenesisChunked(&rpctypes.Context{}, chunk)
+	assert.Error(t, err)
+	assert.Equal(t, "service configuration error, genesis chunks are not initialized", err.Error())
+	assert.Nil(t, res)
+
+	env.genChunks = []string{}
+	chunk = uint(0)
+	res, err = GenesisChunked(&rpctypes.Context{}, chunk)
+	assert.Error(t, err)
+	assert.Equal(t, "service configuration error, there are no chunks", err.Error())
+	assert.Nil(t, res)
+
+	env.genChunks = []string{""}
+	chunk = uint(1)
+	res, err = GenesisChunked(&rpctypes.Context{}, chunk)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "there are ")
+	assert.Contains(t, err.Error(), " is invalid")
+	assert.Nil(t, res)
 }

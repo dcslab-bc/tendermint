@@ -4,21 +4,21 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
-
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	tmbytes "github.com/tendermint/tendermint/libs/bytes"
-	tmjson "github.com/tendermint/tendermint/libs/json"
-	tmos "github.com/tendermint/tendermint/libs/os"
-	"github.com/tendermint/tendermint/libs/protoio"
-	"github.com/tendermint/tendermint/libs/tempfile"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	"github.com/tendermint/tendermint/types"
-	tmtime "github.com/tendermint/tendermint/types/time"
+
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/crypto/ed25519"
+	tmbytes "github.com/Finschia/ostracon/libs/bytes"
+	tmjson "github.com/Finschia/ostracon/libs/json"
+	tmos "github.com/Finschia/ostracon/libs/os"
+	"github.com/Finschia/ostracon/libs/protoio"
+	"github.com/Finschia/ostracon/libs/tempfile"
+	"github.com/Finschia/ostracon/types"
+	tmtime "github.com/Finschia/ostracon/types/time"
 )
 
 // TODO: type ?
@@ -188,7 +188,7 @@ func LoadFilePVEmptyState(keyFilePath, stateFilePath string) *FilePV {
 
 // If loadState is true, we load from the stateFilePath. Otherwise, we use an empty LastSignState.
 func loadFilePV(keyFilePath, stateFilePath string, loadState bool) *FilePV {
-	keyJSONBytes, err := ioutil.ReadFile(keyFilePath)
+	keyJSONBytes, err := os.ReadFile(keyFilePath)
 	if err != nil {
 		tmos.Exit(err.Error())
 	}
@@ -206,7 +206,7 @@ func loadFilePV(keyFilePath, stateFilePath string, loadState bool) *FilePV {
 	pvState := FilePVLastSignState{}
 
 	if loadState {
-		stateJSONBytes, err := ioutil.ReadFile(stateFilePath)
+		stateJSONBytes, err := os.ReadFile(stateFilePath)
 		if err != nil {
 			tmos.Exit(err.Error())
 		}
@@ -265,6 +265,11 @@ func (pv *FilePV) SignProposal(chainID string, proposal *tmproto.Proposal) error
 		return fmt.Errorf("error signing proposal: %v", err)
 	}
 	return nil
+}
+
+// GenerateVRFProof generates a proof for specified message.
+func (pv *FilePV) GenerateVRFProof(message []byte) (crypto.Proof, error) {
+	return pv.Key.PrivKey.VRFProve(message)
 }
 
 // Save persists the FilePV to disk.

@@ -6,14 +6,15 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/libs/log"
-	types "github.com/tendermint/tendermint/rpc/jsonrpc/types"
+	"github.com/Finschia/ostracon/libs/log"
+	types "github.com/Finschia/ostracon/rpc/jsonrpc/types"
 )
 
 func testMux() *http.ServeMux {
@@ -22,7 +23,7 @@ func testMux() *http.ServeMux {
 	}
 	mux := http.NewServeMux()
 	buf := new(bytes.Buffer)
-	logger := log.NewTMLogger(buf)
+	logger := log.NewOCLogger(buf)
 	RegisterRPCFuncs(mux, funcMap, logger)
 
 	return mux
@@ -146,7 +147,7 @@ func TestRPCNotification(t *testing.T) {
 	blob, err := ioutil.ReadAll(res.Body)
 	res.Body.Close()
 	require.Nil(t, err, "reading from the body should not give back an error")
-	require.Equal(t, len(blob), 0, "a notification SHOULD NOT be responded to by the server")
+	require.Equal(t, 0, len(blob), "a notification SHOULD NOT be responded to by the server")
 }
 
 func TestRPCNotificationInBatch(t *testing.T) {
@@ -226,4 +227,27 @@ func TestUnknownRPCPath(t *testing.T) {
 	// Always expecting back a 404 error
 	require.Equal(t, http.StatusNotFound, res.StatusCode, "should always return 404")
 	res.Body.Close()
+}
+
+func TestMakeJSONRPCHandler_Unmarshal_WriteRPCResponseHTTPError_error(t *testing.T) {
+	handlerFunc := makeJSONRPCHandler(nil, log.TestingLogger())
+	// json.Unmarshal error
+	req, _ := http.NewRequest("GET", "http://localhost/", strings.NewReader("hoge"))
+	// WriteRPCResponseHTTPError error
+	rec := NewFailedWriteResponseWriter()
+	handlerFunc.ServeHTTP(rec, req)
+	assert.Equal(t,
+		strconv.Itoa(http.StatusInternalServerError),
+		rec.Header().Get(http.StatusText(http.StatusInternalServerError)))
+}
+
+func TestMakeJSONRPCHandler_last_WriteRPCResponseHTTP_error(t *testing.T) {
+	handlerFunc := makeJSONRPCHandler(TestFuncMap, log.TestingLogger())
+	req, _ := http.NewRequest("GET", "http://localhost/", strings.NewReader(TestGoodBody))
+	// WriteRPCResponseHTTP error
+	rec := NewFailedWriteResponseWriter()
+	handlerFunc.ServeHTTP(rec, req)
+	assert.Equal(t,
+		strconv.Itoa(http.StatusOK),
+		rec.Header().Get(http.StatusText(http.StatusOK)))
 }

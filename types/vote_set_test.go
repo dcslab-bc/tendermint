@@ -6,11 +6,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/tendermint/tendermint/crypto"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	tmtime "github.com/tendermint/tendermint/types/time"
+
+	"github.com/Finschia/ostracon/crypto"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
+	tmtime "github.com/Finschia/ostracon/types/time"
 )
 
 func TestVoteSet_AddVote_Good(t *testing.T) {
@@ -57,6 +57,7 @@ func TestVoteSet_AddVote_Bad(t *testing.T) {
 		Timestamp:        tmtime.Now(),
 		Type:             tmproto.PrevoteType,
 		BlockID:          BlockID{nil, PartSetHeader{}},
+		Signature:        []byte{},
 	}
 
 	// val0 votes for nil.
@@ -118,6 +119,29 @@ func TestVoteSet_AddVote_Bad(t *testing.T) {
 			t.Errorf("expected VoteSet.Add to fail, wrong type")
 		}
 	}
+}
+
+func TestVoteSet_List(t *testing.T) {
+	height, round := int64(1), int32(0)
+	voteSet, _, privVals := randVoteSet(height, round, tmproto.PrevoteType, 10, 1)
+
+	votes := addVoteByAllValidatorSet(t, voteSet, privVals, height, round)
+	assert.Equal(t, votes, voteSet.List())
+
+	voteSet = nil
+	assert.Nil(t, voteSet.List())
+}
+
+func TestVoteSet_HasAll(t *testing.T) {
+	height, round := int64(1), int32(0)
+	voteSet, _, privVals := randVoteSet(height, round, tmproto.PrevoteType, 10, 1)
+	assert.False(t, voteSet.HasAll())
+
+	addVoteByAllValidatorSet(t, voteSet, privVals, height, round)
+	assert.True(t, voteSet.HasAll())
+
+	voteSet = nil
+	assert.False(t, voteSet.HasAll())
 }
 
 func TestVoteSet_2_3Majority(t *testing.T) {
@@ -484,6 +508,30 @@ func randVoteSet(
 ) (*VoteSet, *ValidatorSet, []PrivValidator) {
 	valSet, privValidators := RandValidatorSet(numValidators, votingPower)
 	return NewVoteSet("test_chain_id", height, round, signedMsgType, valSet), valSet, privValidators
+}
+
+func addVoteByAllValidatorSet(t *testing.T, voteSet *VoteSet, privVals []PrivValidator, height int64, round int32) []Vote {
+	votes := make([]Vote, voteSet.Size())
+	for i, val := range voteSet.valSet.Validators {
+		vote := &Vote{
+			Type:             tmproto.PrevoteType,
+			Height:           height,
+			Round:            round,
+			BlockID:          randBlockID(),
+			Timestamp:        tmtime.Now(),
+			ValidatorAddress: val.Address,
+			ValidatorIndex:   int32(i),
+		}
+		v := vote.ToProto()
+		err := privVals[i].SignVote(voteSet.chainID, v)
+		require.NoError(t, err)
+		vote.Signature = v.Signature
+		added, err := voteSet.AddVote(vote)
+		require.NoError(t, err)
+		require.True(t, added)
+		votes[i] = *vote
+	}
+	return votes
 }
 
 // Convenience: Return new vote with different validator address/index

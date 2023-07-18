@@ -9,18 +9,19 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 
-	cstypes "github.com/tendermint/tendermint/consensus/types"
-	"github.com/tendermint/tendermint/libs/bits"
-	tmevents "github.com/tendermint/tendermint/libs/events"
-	tmjson "github.com/tendermint/tendermint/libs/json"
-	"github.com/tendermint/tendermint/libs/log"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
-	"github.com/tendermint/tendermint/p2p"
 	tmcons "github.com/tendermint/tendermint/proto/tendermint/consensus"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/types"
-	tmtime "github.com/tendermint/tendermint/types/time"
+
+	cstypes "github.com/Finschia/ostracon/consensus/types"
+	"github.com/Finschia/ostracon/libs/bits"
+	tmevents "github.com/Finschia/ostracon/libs/events"
+	tmjson "github.com/Finschia/ostracon/libs/json"
+	"github.com/Finschia/ostracon/libs/log"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
+	"github.com/Finschia/ostracon/p2p"
+	sm "github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/types"
+	tmtime "github.com/Finschia/ostracon/types/time"
 )
 
 const (
@@ -55,14 +56,14 @@ type ReactorOption func(*Reactor)
 
 // NewReactor returns a new Reactor with the given
 // consensusState.
-func NewReactor(consensusState *State, waitSync bool, options ...ReactorOption) *Reactor {
+func NewReactor(consensusState *State, waitSync bool, async bool, recvBufSize int, options ...ReactorOption) *Reactor {
 	conR := &Reactor{
 		conS:     consensusState,
 		waitSync: waitSync,
 		rs:       consensusState.GetRoundState(),
 		Metrics:  NopMetrics(),
 	}
-	conR.BaseReactor = *p2p.NewBaseReactor("Consensus", conR)
+	conR.BaseReactor = *p2p.NewBaseReactor("Consensus", conR, async, recvBufSize)
 
 	for _, option := range options {
 		option(conR)
@@ -75,6 +76,12 @@ func NewReactor(consensusState *State, waitSync bool, options ...ReactorOption) 
 // broadcasted to other peers and starting state if we're not in fast sync.
 func (conR *Reactor) OnStart() error {
 	conR.Logger.Info("Reactor ", "waitSync", conR.WaitSync())
+
+	// call BaseReactor's OnStart()
+	err := conR.BaseReactor.OnStart()
+	if err != nil {
+		return err
+	}
 
 	// start routine that computes peer statistics for evaluating peer quality
 	go conR.peerStatsRoutine()
@@ -1072,7 +1079,11 @@ func (ps *PeerState) SetHasProposalBlockPart(height int64, round int32, index in
 func (ps *PeerState) PickSendVote(votes types.VoteSetReader) bool {
 	if vote, ok := ps.PickVoteToSend(votes); ok {
 		msg := &VoteMessage{vote}
-		ps.logger.Debug("Sending vote message", "ps", ps, "vote", vote)
+		// Remove the logging `PeerState`
+		// See: https://github.com/Finschia/ostracon/issues/457
+		// See: https://github.com/tendermint/tendermint/discussions/9353
+		// ps.logger.Debug("Sending vote message", "ps", ps, "vote", vote)
+		ps.logger.Debug("Sending vote message", "vote", vote)
 		if ps.peer.Send(VoteChannel, MustEncode(msg)) {
 			ps.SetHasVote(vote)
 			return true
@@ -1428,15 +1439,15 @@ type Message interface {
 }
 
 func init() {
-	tmjson.RegisterType(&NewRoundStepMessage{}, "tendermint/NewRoundStepMessage")
-	tmjson.RegisterType(&NewValidBlockMessage{}, "tendermint/NewValidBlockMessage")
-	tmjson.RegisterType(&ProposalMessage{}, "tendermint/Proposal")
-	tmjson.RegisterType(&ProposalPOLMessage{}, "tendermint/ProposalPOL")
-	tmjson.RegisterType(&BlockPartMessage{}, "tendermint/BlockPart")
-	tmjson.RegisterType(&VoteMessage{}, "tendermint/Vote")
-	tmjson.RegisterType(&HasVoteMessage{}, "tendermint/HasVote")
-	tmjson.RegisterType(&VoteSetMaj23Message{}, "tendermint/VoteSetMaj23")
-	tmjson.RegisterType(&VoteSetBitsMessage{}, "tendermint/VoteSetBits")
+	tmjson.RegisterType(&NewRoundStepMessage{}, "ostracon/NewRoundStepMessage")
+	tmjson.RegisterType(&NewValidBlockMessage{}, "ostracon/NewValidBlockMessage")
+	tmjson.RegisterType(&ProposalMessage{}, "ostracon/Proposal")
+	tmjson.RegisterType(&ProposalPOLMessage{}, "ostracon/ProposalPOL")
+	tmjson.RegisterType(&BlockPartMessage{}, "ostracon/BlockPart")
+	tmjson.RegisterType(&VoteMessage{}, "ostracon/Vote")
+	tmjson.RegisterType(&HasVoteMessage{}, "ostracon/HasVote")
+	tmjson.RegisterType(&VoteSetMaj23Message{}, "ostracon/VoteSetMaj23")
+	tmjson.RegisterType(&VoteSetBitsMessage{}, "ostracon/VoteSetBits")
 }
 
 func decodeMsg(bz []byte) (msg Message, err error) {

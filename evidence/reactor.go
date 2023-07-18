@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"time"
 
-	clist "github.com/tendermint/tendermint/libs/clist"
-	"github.com/tendermint/tendermint/libs/log"
-	"github.com/tendermint/tendermint/p2p"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	"github.com/tendermint/tendermint/types"
+
+	clist "github.com/Finschia/ostracon/libs/clist"
+	"github.com/Finschia/ostracon/libs/log"
+	"github.com/Finschia/ostracon/p2p"
+	"github.com/Finschia/ostracon/types"
 )
 
 const (
@@ -33,11 +34,11 @@ type Reactor struct {
 }
 
 // NewReactor returns a new Reactor with the given config and evpool.
-func NewReactor(evpool *Pool) *Reactor {
+func NewReactor(evpool *Pool, async bool, recvBufSize int) *Reactor {
 	evR := &Reactor{
 		evpool: evpool,
 	}
-	evR.BaseReactor = *p2p.NewBaseReactor("Evidence", evR)
+	evR.BaseReactor = *p2p.NewBaseReactor("Evidence", evR, async, recvBufSize)
 	return evR
 }
 

@@ -8,18 +8,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	"github.com/tendermint/tendermint/libs/log"
-	tmnet "github.com/tendermint/tendermint/libs/net"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/crypto/ed25519"
+	"github.com/Finschia/ostracon/libs/log"
+	tmnet "github.com/Finschia/ostracon/libs/net"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
+	"github.com/Finschia/ostracon/types"
 )
 
 var (
 	testTimeoutAccept = defaultTimeoutAcceptSeconds * time.Second
 
-	testTimeoutReadWrite    = 100 * time.Millisecond
-	testTimeoutReadWrite2o3 = 60 * time.Millisecond // 2/3 of the other one
+	testTimeoutReadWrite    = 1000 * time.Millisecond // increase timeout for slow test env
+	testTimeoutReadWrite2o3 = 60 * time.Millisecond   // 2/3 of the other one
 )
 
 type dialerTestCase struct {

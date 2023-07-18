@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tendermint/tendermint/light"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/light"
+	"github.com/Finschia/ostracon/types"
 )
 
 // verify verifies the evidence fully by checking:
@@ -260,7 +260,7 @@ func validateABCIEvidence(
 
 		if ev.ByzantineValidators[idx].VotingPower != val.VotingPower {
 			return fmt.Errorf(
-				"evidence contained unexpected byzantine validator power; expected %d, got %d",
+				"evidence contained unexpected byzantine validator voting power; expected %d, got %d",
 				val.VotingPower, ev.ByzantineValidators[idx].VotingPower,
 			)
 		}

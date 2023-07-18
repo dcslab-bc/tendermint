@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tendermint/tendermint/crypto"
-	cryptoenc "github.com/tendermint/tendermint/crypto/encoding"
 	privvalproto "github.com/tendermint/tendermint/proto/tendermint/privval"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	"github.com/tendermint/tendermint/types"
+
+	"github.com/Finschia/ostracon/crypto"
+	cryptoenc "github.com/Finschia/ostracon/crypto/encoding"
+	ocprivvalproto "github.com/Finschia/ostracon/proto/ostracon/privval"
+	"github.com/Finschia/ostracon/types"
 )
 
 // SignerClient implements PrivValidator.
@@ -50,22 +52,6 @@ func (sc *SignerClient) WaitForConnection(maxWait time.Duration) error {
 //--------------------------------------------------------
 // Implement PrivValidator
 
-// Ping sends a ping request to the remote signer
-func (sc *SignerClient) Ping() error {
-	response, err := sc.endpoint.SendRequest(mustWrapMsg(&privvalproto.PingRequest{}))
-	if err != nil {
-		sc.endpoint.Logger.Error("SignerClient::Ping", "err", err)
-		return nil
-	}
-
-	pb := response.GetPingResponse()
-	if pb == nil {
-		return err
-	}
-
-	return nil
-}
-
 // GetPubKey retrieves a public key from a remote signer
 // returns an error if client is not able to provide the key
 func (sc *SignerClient) GetPubKey() (crypto.PubKey, error) {
@@ -82,7 +68,7 @@ func (sc *SignerClient) GetPubKey() (crypto.PubKey, error) {
 		return nil, &RemoteSignerError{Code: int(resp.Error.Code), Description: resp.Error.Description}
 	}
 
-	pk, err := cryptoenc.PubKeyFromProto(resp.PubKey)
+	pk, err := cryptoenc.PubKeyFromProto(&resp.PubKey)
 	if err != nil {
 		return nil, err
 	}
@@ -130,4 +116,25 @@ func (sc *SignerClient) SignProposal(chainID string, proposal *tmproto.Proposal)
 	*proposal = resp.Proposal
 
 	return nil
+}
+
+// GenerateVRFProof requests a remote signer to generate a VRF proof
+func (sc *SignerClient) GenerateVRFProof(message []byte) (crypto.Proof, error) {
+	msg := &ocprivvalproto.VRFProofRequest{Message: message}
+	response, err := sc.endpoint.SendRequest(mustWrapMsg(msg))
+	if err != nil {
+		sc.endpoint.Logger.Error("SignerClient::GenerateVRFProof", "err", err)
+		return nil, err
+	}
+
+	switch r := response.Sum.(type) {
+	case *ocprivvalproto.Message_VrfProofResponse:
+		if r.VrfProofResponse.Error != nil {
+			return nil, fmt.Errorf(r.VrfProofResponse.Error.Description)
+		}
+		return r.VrfProofResponse.Proof, nil
+	default:
+		sc.endpoint.Logger.Error("SignerClient::GenerateVRFProof", "err", "response != VRFProofResponse")
+		return nil, ErrUnexpectedResponse
+	}
 }

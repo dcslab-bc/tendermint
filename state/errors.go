@@ -41,6 +41,10 @@ type (
 		Height int64
 	}
 
+	ErrNoProofHashForHeight struct {
+		Height int64
+	}
+
 	ErrNoConsensusParamsForHeight struct {
 		Height int64
 	}
@@ -73,7 +77,7 @@ func (e ErrAppBlockHeightTooLow) Error() string {
 
 func (e ErrLastStateMismatch) Error() string {
 	return fmt.Sprintf(
-		"latest tendermint block (%d) LastAppHash (%X) does not match app's AppHash (%X)",
+		"latest ostracon block (%d) LastAppHash (%X) does not match app's AppHash (%X)",
 		e.Height,
 		e.Core,
 		e.App,
@@ -90,6 +94,10 @@ func (e ErrStateMismatch) Error() string {
 
 func (e ErrNoValSetForHeight) Error() string {
 	return fmt.Sprintf("could not find validator set for height #%d", e.Height)
+}
+
+func (e ErrNoProofHashForHeight) Error() string {
+	return fmt.Sprintf("could not find proof hash for height #%d", e.Height)
 }
 
 func (e ErrNoConsensusParamsForHeight) Error() string {

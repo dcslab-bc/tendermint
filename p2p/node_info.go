@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"reflect"
 
-	tmbytes "github.com/tendermint/tendermint/libs/bytes"
-	tmstrings "github.com/tendermint/tendermint/libs/strings"
 	tmp2p "github.com/tendermint/tendermint/proto/tendermint/p2p"
-	"github.com/tendermint/tendermint/version"
+
+	tmbytes "github.com/Finschia/ostracon/libs/bytes"
+	tmstrings "github.com/Finschia/ostracon/libs/strings"
+	"github.com/Finschia/ostracon/version"
 )
+
+//go:generate mockery --case underscore --name NodeInfo
 
 const (
 	maxNodeInfoSize = 10240 // 10KB
@@ -57,7 +60,7 @@ type ProtocolVersion struct {
 var defaultProtocolVersion = NewProtocolVersion(
 	version.P2PProtocol,
 	version.BlockProtocol,
-	0,
+	version.AppProtocol,
 )
 
 // NewProtocolVersion returns a fully populated ProtocolVersion.
@@ -75,7 +78,7 @@ func NewProtocolVersion(p2p, block, app uint64) ProtocolVersion {
 var _ NodeInfo = DefaultNodeInfo{}
 
 // DefaultNodeInfo is the basic node information exchanged
-// between two peers during the Tendermint P2P handshake.
+// between two peers during the Ostracon P2P handshake.
 type DefaultNodeInfo struct {
 	ProtocolVersion ProtocolVersion `json:"protocol_version"`
 

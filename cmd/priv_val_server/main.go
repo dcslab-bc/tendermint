@@ -5,12 +5,12 @@ import (
 	"os"
 	"time"
 
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	"github.com/tendermint/tendermint/libs/log"
-	tmnet "github.com/tendermint/tendermint/libs/net"
-	tmos "github.com/tendermint/tendermint/libs/os"
+	"github.com/Finschia/ostracon/crypto/ed25519"
+	"github.com/Finschia/ostracon/libs/log"
+	tmnet "github.com/Finschia/ostracon/libs/net"
+	tmos "github.com/Finschia/ostracon/libs/os"
 
-	"github.com/tendermint/tendermint/privval"
+	"github.com/Finschia/ostracon/privval"
 )
 
 func main() {
@@ -20,7 +20,7 @@ func main() {
 		privValKeyPath   = flag.String("priv-key", "", "priv val key file path")
 		privValStatePath = flag.String("priv-state", "", "priv val state file path")
 
-		logger = log.NewTMLogger(
+		logger = log.NewOCLogger(
 			log.NewSyncWriter(os.Stdout),
 		).With("module", "priv_val")
 	)

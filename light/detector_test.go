@@ -9,12 +9,12 @@ import (
 
 	dbm "github.com/tendermint/tm-db"
 
-	"github.com/tendermint/tendermint/libs/log"
-	"github.com/tendermint/tendermint/light"
-	"github.com/tendermint/tendermint/light/provider"
-	mockp "github.com/tendermint/tendermint/light/provider/mock"
-	dbs "github.com/tendermint/tendermint/light/store/db"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/libs/log"
+	"github.com/Finschia/ostracon/light"
+	"github.com/Finschia/ostracon/light/provider"
+	mockp "github.com/Finschia/ostracon/light/provider/mock"
+	dbs "github.com/Finschia/ostracon/light/store/db"
+	"github.com/Finschia/ostracon/types"
 )
 
 func TestLightClientAttackEvidence_Lunatic(t *testing.T) {
@@ -29,18 +29,34 @@ func TestLightClientAttackEvidence_Lunatic(t *testing.T) {
 
 	witnessHeaders, witnessValidators, chainKeys := genMockNodeWithKeys(chainID, latestHeight, valSize, 2, bTime)
 	witness := mockp.New(chainID, witnessHeaders, witnessValidators)
-	forgedKeys := chainKeys[divergenceHeight-1].ChangeKeys(3) // we change 3 out of the 5 validators (still 2/5 remain)
-	forgedVals := forgedKeys.ToValidators(2, 0)
 
-	for height := int64(1); height <= latestHeight; height++ {
-		if height < divergenceHeight {
-			primaryHeaders[height] = witnessHeaders[height]
-			primaryValidators[height] = witnessValidators[height]
-			continue
-		}
-		primaryHeaders[height] = forgedKeys.GenSignedHeader(chainID, height, bTime.Add(time.Duration(height)*time.Minute),
-			nil, forgedVals, forgedVals, hash("app_hash"), hash("cons_hash"), hash("results_hash"), 0, len(forgedKeys))
-		primaryValidators[height] = forgedVals
+	preDivergenceHeight := divergenceHeight - 1
+	for height := int64(1); height < preDivergenceHeight; height++ {
+		primaryHeaders[height] = witnessHeaders[height]
+		primaryValidators[height] = witnessValidators[height]
+	}
+	// previous divergence height
+	curKeys := chainKeys[preDivergenceHeight]
+	forgedKeys := curKeys.ChangeKeys(3) // we change 3 out of the 5 validators (still 2/5 remain)
+	forgedVals := forgedKeys.ToValidators(2, 0)
+	header, vals, _ := genMockNodeWithKey(chainID, preDivergenceHeight, nil,
+		curKeys, forgedKeys, // Should specify the correct current/next keys
+		nil, forgedVals, primaryHeaders[preDivergenceHeight-1],
+		bTime.Add(time.Duration(preDivergenceHeight)*time.Minute),
+		0, len(curKeys),
+		0, nil)
+	primaryHeaders[preDivergenceHeight] = header
+	primaryValidators[preDivergenceHeight] = vals
+	// after divergence height
+	for height := divergenceHeight; height <= latestHeight; height++ {
+		header, vals, _ := genMockNodeWithKey(chainID, height, nil,
+			forgedKeys, forgedKeys,
+			forgedVals, forgedVals, primaryHeaders[height-1],
+			bTime.Add(time.Duration(height)*time.Minute),
+			0, len(forgedKeys),
+			0, nil)
+		primaryHeaders[height] = header
+		primaryValidators[height] = vals
 	}
 	primary := mockp.New(chainID, primaryHeaders, primaryValidators)
 
@@ -68,7 +84,7 @@ func TestLightClientAttackEvidence_Lunatic(t *testing.T) {
 
 	// Check evidence was sent to both full nodes.
 	evAgainstPrimary := &types.LightClientAttackEvidence{
-		// after the divergence height the valset doesn't change so we expect the evidence to be for height 10
+		// after the divergence height the valset doesn't change, so we expect the evidence to be for height 10
 		ConflictingBlock: &types.LightBlock{
 			SignedHeader: primaryHeaders[10],
 			ValidatorSet: primaryValidators[10],
@@ -116,13 +132,16 @@ func TestLightClientAttackEvidence_Equivocation(t *testing.T) {
 				primaryValidators[height] = witnessValidators[height]
 				continue
 			}
-			// we don't have a network partition so we will make 4/5 (greater than 2/3) malicious and vote again for
+			// we don't have a network partition, so we will make 4/5 (greater than 2/3) malicious and vote again for
 			// a different block (which we do by adding txs)
-			primaryHeaders[height] = chainKeys[height].GenSignedHeader(chainID, height,
-				bTime.Add(time.Duration(height)*time.Minute), []types.Tx{[]byte("abcd")},
-				witnessValidators[height], witnessValidators[height+1], hash("app_hash"),
-				hash("cons_hash"), hash("results_hash"), 0, len(chainKeys[height])-1)
-			primaryValidators[height] = witnessValidators[height]
+			header, vals, _ := genMockNodeWithKey(chainID, height, []types.Tx{[]byte("abcd")},
+				chainKeys[height], chainKeys[height+1],
+				witnessValidators[height], witnessValidators[height+1], primaryHeaders[height-1],
+				bTime.Add(time.Duration(height)*time.Minute),
+				0, len(chainKeys[height])-1, // make 4/5
+				0, nil)
+			primaryHeaders[height] = header
+			primaryValidators[height] = vals
 		}
 		primary := mockp.New(chainID, primaryHeaders, primaryValidators)
 
@@ -192,20 +211,29 @@ func TestLightClientAttackEvidence_ForwardLunatic(t *testing.T) {
 		primaryHeaders[h] = witnessHeaders[h]
 		primaryValidators[h] = witnessValidators[h]
 	}
-	forgedKeys := chainKeys[latestHeight].ChangeKeys(3) // we change 3 out of the 5 validators (still 2/5 remain)
-	primaryValidators[forgedHeight] = forgedKeys.ToValidators(2, 0)
-	primaryHeaders[forgedHeight] = forgedKeys.GenSignedHeader(
-		chainID,
-		forgedHeight,
-		bTime.Add(time.Duration(latestHeight+1)*time.Minute), // 11 mins
-		nil,
-		primaryValidators[forgedHeight],
-		primaryValidators[forgedHeight],
-		hash("app_hash"),
-		hash("cons_hash"),
-		hash("results_hash"),
+
+	// Make height=proofHeight for forgedHeight
+	proofKeys := chainKeys[proofHeight]
+	forgedKeys := proofKeys.ChangeKeys(3) // we change 3 out of the 5 validators (still 2/5 remain)
+	forgedVals := forgedKeys.ToValidators(2, 0)
+	header, vals, _ := genMockNodeWithKey(chainID, proofHeight, nil,
+		proofKeys, forgedKeys,
+		nil, forgedVals, primaryHeaders[proofHeight-1],
+		bTime.Add(time.Duration(proofHeight)*time.Minute), // 11 mins
+		0, len(proofKeys),
+		0, nil)
+	primaryHeaders[proofHeight] = header
+	primaryValidators[proofHeight] = vals
+
+	// Make height=forgedHeight for forward lunatic
+	header, vals, _ = genMockNodeWithKey(chainID, forgedHeight, nil,
+		forgedKeys, forgedKeys,
+		forgedVals, forgedVals, primaryHeaders[forgedHeight-1],
+		bTime.Add(time.Duration(forgedHeight)*time.Minute),
 		0, len(forgedKeys),
-	)
+		0, nil)
+	primaryHeaders[forgedHeight] = header
+	primaryValidators[forgedHeight] = vals
 
 	witness := mockp.New(chainID, witnessHeaders, witnessValidators)
 	primary := mockp.New(chainID, primaryHeaders, primaryValidators)
@@ -233,22 +261,16 @@ func TestLightClientAttackEvidence_ForwardLunatic(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// two seconds later, the supporting withness should receive the header that can be used
+	// two seconds later, the supporting witness should receive the header that can be used
 	// to prove that there was an attack
-	vals := chainKeys[latestHeight].ToValidators(2, 0)
+	header, vals, _ = genMockNodeWithKey(chainID, proofHeight, nil,
+		proofKeys, proofKeys,
+		nil, nil, primaryHeaders[proofHeight-1],
+		bTime.Add(time.Duration(proofHeight+1)*time.Minute), // 12 mins
+		0, len(proofKeys),
+		0, nil)
 	newLb := &types.LightBlock{
-		SignedHeader: chainKeys[latestHeight].GenSignedHeader(
-			chainID,
-			proofHeight,
-			bTime.Add(time.Duration(proofHeight+1)*time.Minute), // 12 mins
-			nil,
-			vals,
-			vals,
-			hash("app_hash"),
-			hash("cons_hash"),
-			hash("results_hash"),
-			0, len(chainKeys),
-		),
+		SignedHeader: header,
 		ValidatorSet: vals,
 	}
 	go func() {

@@ -12,20 +12,22 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	abci "github.com/tendermint/tendermint/abci/types"
+	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	dbm "github.com/tendermint/tm-db"
 
-	abcicli "github.com/tendermint/tendermint/abci/client"
-	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/evidence"
-	"github.com/tendermint/tendermint/libs/log"
-	"github.com/tendermint/tendermint/libs/service"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
-	mempl "github.com/tendermint/tendermint/mempool"
-	"github.com/tendermint/tendermint/p2p"
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/store"
-	"github.com/tendermint/tendermint/types"
+	config2 "github.com/Finschia/ostracon/config"
+
+	abcicli "github.com/Finschia/ostracon/abci/client"
+	"github.com/Finschia/ostracon/evidence"
+	"github.com/Finschia/ostracon/libs/log"
+	"github.com/Finschia/ostracon/libs/service"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
+	mempl "github.com/Finschia/ostracon/mempool"
+	"github.com/Finschia/ostracon/p2p"
+	sm "github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/store"
+	"github.com/Finschia/ostracon/types"
 )
 
 //----------------------------------------------
@@ -52,7 +54,7 @@ func TestByzantinePrevoteEquivocation(t *testing.T) {
 		defer os.RemoveAll(thisConfig.RootDir)
 		ensureDir(path.Dir(thisConfig.Consensus.WalFile()), 0700) // dir for wal
 		app := appFunc()
-		vals := types.TM2PB.ValidatorUpdates(state.Validators)
+		vals := types.OC2PB.ValidatorUpdates(state.Validators)
 		app.InitChain(abci.RequestInitChain{Validators: vals})
 
 		blockDB := dbm.NewMemDB()
@@ -79,7 +81,6 @@ func TestByzantinePrevoteEquivocation(t *testing.T) {
 		// Make State
 		blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyAppConnCon, mempool, evpool)
 		cs := NewState(thisConfig.Consensus, state, blockExec, blockStore, mempool, evpool)
-		cs.SetLogger(cs.Logger)
 		// set private validator
 		pv := privVals[i]
 		cs.SetPrivValidator(pv)
@@ -101,7 +102,12 @@ func TestByzantinePrevoteEquivocation(t *testing.T) {
 	blocksSubs := make([]types.Subscription, 0)
 	eventBuses := make([]*types.EventBus, nValidators)
 	for i := 0; i < nValidators; i++ {
-		reactors[i] = NewReactor(css[i], true) // so we dont start the consensus states
+		reactors[i] = NewReactor(
+			css[i],
+			true,
+			config.P2P.RecvAsync,
+			config.P2P.ConsensusRecvBufSize,
+		) // so we dont start the consensus states
 		reactors[i].SetLogger(css[i].Logger)
 
 		// eventBus is already started with the cs
@@ -118,9 +124,9 @@ func TestByzantinePrevoteEquivocation(t *testing.T) {
 		}
 	}
 	// make connected switches and start all reactors
-	p2p.MakeConnectedSwitches(config.P2P, nValidators, func(i int, s *p2p.Switch) *p2p.Switch {
+	p2p.MakeConnectedSwitches(config.P2P, nValidators, func(i int, s *p2p.Switch, c *config2.P2PConfig) *p2p.Switch {
 		s.AddReactor("CONSENSUS", reactors[i])
-		s.SetLogger(reactors[i].conS.Logger.With("module", "p2p"))
+		s.SetLogger(log.NewNopLogger().With("module", "p2p")) // Switch log is noisy for this test
 		return s
 	}, p2p.Connect2Switches)
 
@@ -180,7 +186,10 @@ func TestByzantinePrevoteEquivocation(t *testing.T) {
 		}
 
 		// omit the last signature in the commit
-		commit.Signatures[len(commit.Signatures)-1] = types.NewCommitSigAbsent()
+		// except a proposal for the first block
+		if commit.Signatures != nil {
+			commit.Signatures[len(commit.Signatures)-1] = types.NewCommitSigAbsent()
+		}
 
 		if lazyProposer.privValidatorPubKey == nil {
 			// If this node is a validator & proposer in the current round, it will
@@ -190,8 +199,10 @@ func TestByzantinePrevoteEquivocation(t *testing.T) {
 		}
 		proposerAddr := lazyProposer.privValidatorPubKey.Address()
 
+		message := lazyProposer.state.MakeHashMessage(lazyProposer.Round)
+		proof, _ := lazyProposer.privValidator.GenerateVRFProof(message)
 		block, blockParts := lazyProposer.blockExec.CreateProposalBlock(
-			lazyProposer.Height, lazyProposer.state, commit, proposerAddr,
+			lazyProposer.Height, lazyProposer.state, commit, proposerAddr, lazyProposer.Round, proof, 0,
 		)
 
 		// Flush the WAL. Otherwise, we may not recompute the same proposal to sign,
@@ -265,7 +276,7 @@ func TestByzantinePrevoteEquivocation(t *testing.T) {
 				assert.Equal(t, prevoteHeight, ev.Height())
 			}
 		}
-	case <-time.After(20 * time.Second):
+	case <-time.After(10 * time.Second): // XXX 20 second is too much time, so we changed to 10 second
 		for i, reactor := range reactors {
 			t.Logf("Consensus Reactor %d\n%v", i, reactor)
 		}
@@ -285,6 +296,9 @@ func TestByzantineConflictingProposalsWithPartition(t *testing.T) {
 	css, cleanup := randConsensusNet(N, "consensus_byzantine_test", newMockTickerFunc(false), app)
 	defer cleanup()
 
+	// get proposer of first block
+	proposerIdx, _ := findProposer(css[0])
+
 	// give the byzantine validator a normal ticker
 	ticker := NewTimeoutTicker()
 	ticker.SetLogger(css[0].Logger)
@@ -297,7 +311,7 @@ func TestByzantineConflictingProposalsWithPartition(t *testing.T) {
 			config.P2P,
 			i,
 			"foo", "1.0.0",
-			func(i int, sw *p2p.Switch) *p2p.Switch {
+			func(i int, sw *p2p.Switch, config *config2.P2PConfig) *p2p.Switch {
 				return sw
 			})
 		switches[i].SetLogger(p2pLogger.With("validator", i))
@@ -310,7 +324,7 @@ func TestByzantineConflictingProposalsWithPartition(t *testing.T) {
 		// enable txs so we can create different proposals
 		assertMempool(css[i].txNotifier).EnableTxsAvailable()
 		// make first val byzantine
-		if i == 0 {
+		if int32(i) == proposerIdx {
 			// NOTE: Now, test validators are MockPV, which by default doesn't
 			// do any safety checks.
 			css[i].privValidator.(types.MockPV).DisableChecks()
@@ -331,14 +345,14 @@ func TestByzantineConflictingProposalsWithPartition(t *testing.T) {
 		blocksSubs[i], err = eventBus.Subscribe(context.Background(), testSubscriber, types.EventQueryNewBlock)
 		require.NoError(t, err)
 
-		conR := NewReactor(css[i], true) // so we don't start the consensus states
+		conR := NewReactor(css[i], true, true, 1000) // so we don't start the consensus states
 		conR.SetLogger(logger.With("validator", i))
 		conR.SetEventBus(eventBus)
 
 		var conRI p2p.Reactor = conR
 
 		// make first val byzantine
-		if i == 0 {
+		if int32(i) == proposerIdx {
 			conRI = NewByzantineReactor(conR)
 		}
 
@@ -359,13 +373,13 @@ func TestByzantineConflictingProposalsWithPartition(t *testing.T) {
 		}
 	}()
 
-	p2p.MakeConnectedSwitches(config.P2P, N, func(i int, s *p2p.Switch) *p2p.Switch {
+	p2p.MakeConnectedSwitches(config.P2P, N, func(i int, s *p2p.Switch, config *config2.P2PConfig) *p2p.Switch {
 		// ignore new switch s, we already made ours
 		switches[i].AddReactor("CONSENSUS", reactors[i])
 		return switches[i]
 	}, func(sws []*p2p.Switch, i, j int) {
 		// the network starts partitioned with globally active adversary
-		if i != 0 {
+		if int32(i) != proposerIdx && int32(j) != proposerIdx {
 			return
 		}
 		p2p.Connect2Switches(sws, i, j)
@@ -373,20 +387,22 @@ func TestByzantineConflictingProposalsWithPartition(t *testing.T) {
 
 	// start the non-byz state machines.
 	// note these must be started before the byz
-	for i := 1; i < N; i++ {
-		cr := reactors[i].(*Reactor)
-		cr.SwitchToConsensus(cr.conS.GetState(), false)
+	for i := 0; i < N; i++ {
+		if int32(i) != proposerIdx {
+			cr := reactors[i].(*Reactor)
+			cr.SwitchToConsensus(cr.conS.GetState(), false)
+		}
 	}
 
 	// start the byzantine state machine
-	byzR := reactors[0].(*ByzantineReactor)
+	byzR := reactors[proposerIdx].(*ByzantineReactor)
 	s := byzR.reactor.conS.GetState()
 	byzR.reactor.SwitchToConsensus(s, false)
 
 	// byz proposer sends one block to peers[0]
 	// and the other block to peers[1] and peers[2].
 	// note peers and switches order don't match.
-	peers := switches[0].Peers().List()
+	peers := switches[proposerIdx].Peers().List()
 
 	// partition A
 	ind0 := getSwitchIndex(switches, peers[0])
@@ -396,6 +412,7 @@ func TestByzantineConflictingProposalsWithPartition(t *testing.T) {
 	ind2 := getSwitchIndex(switches, peers[2])
 	p2p.Connect2Switches(switches, ind1, ind2)
 
+	// FIXME: test stops at the following step after the introduction of VRF elections
 	// wait for someone in the big partition (B) to make a block
 	<-blocksSubs[ind2].Out()
 
@@ -406,12 +423,14 @@ func TestByzantineConflictingProposalsWithPartition(t *testing.T) {
 	// wait till everyone makes the first new block
 	// (one of them already has)
 	wg := new(sync.WaitGroup)
-	for i := 1; i < N-1; i++ {
-		wg.Add(1)
-		go func(j int) {
-			<-blocksSubs[j].Out()
-			wg.Done()
-		}(i)
+	for i := 0; i < N-1; i++ {
+		if int32(i) != proposerIdx {
+			wg.Add(1)
+			go func(j int) {
+				<-blocksSubs[j].Out()
+				wg.Done()
+			}(i)
+		}
 	}
 
 	done := make(chan struct{})
@@ -425,11 +444,17 @@ func TestByzantineConflictingProposalsWithPartition(t *testing.T) {
 	case <-done:
 	case <-tick.C:
 		for i, reactor := range reactors {
-			t.Log(fmt.Sprintf("Consensus Reactor %v", i))
-			t.Log(fmt.Sprintf("%v", reactor))
+			t.Logf("Consensus Reactor %v", i)
+			t.Logf("%v", reactor)
 		}
 		t.Fatalf("Timed out waiting for all validators to commit first block")
 	}
+}
+
+// find proposer of current height and round from State
+func findProposer(state *State) (int32, *types.Validator) {
+	proposer := state.Validators.SelectProposer(state.state.LastProofHash, state.Height, state.Round)
+	return state.Validators.GetByAddress(proposer.PubKey.Address())
 }
 
 //-------------------------------
@@ -440,7 +465,7 @@ func byzantineDecideProposalFunc(t *testing.T, height int64, round int32, cs *St
 	// Avoid sending on internalMsgQueue and running consensus state.
 
 	// Create a new proposal block from state/txs from the mempool.
-	block1, blockParts1 := cs.createProposalBlock()
+	block1, blockParts1 := cs.createProposalBlock(round)
 	polRound, propBlockID := cs.ValidRound, types.BlockID{Hash: block1.Hash(), PartSetHeader: blockParts1.Header()}
 	proposal1 := types.NewProposal(height, round, polRound, propBlockID)
 	p1 := proposal1.ToProto()
@@ -454,7 +479,7 @@ func byzantineDecideProposalFunc(t *testing.T, height int64, round int32, cs *St
 	deliverTxsRange(cs, 0, 1)
 
 	// Create a new proposal block from state/txs from the mempool.
-	block2, blockParts2 := cs.createProposalBlock()
+	block2, blockParts2 := cs.createProposalBlock(round)
 	polRound, propBlockID = cs.ValidRound, types.BlockID{Hash: block2.Hash(), PartSetHeader: blockParts2.Header()}
 	proposal2 := types.NewProposal(height, round, polRound, propBlockID)
 	p2 := proposal2.ToProto()
@@ -552,3 +577,10 @@ func (br *ByzantineReactor) Receive(chID byte, peer p2p.Peer, msgBytes []byte) {
 	br.reactor.Receive(chID, peer, msgBytes)
 }
 func (br *ByzantineReactor) InitPeer(peer p2p.Peer) p2p.Peer { return peer }
+func (br *ByzantineReactor) RecvRoutine() {
+	br.reactor.RecvRoutine()
+}
+
+func (br *ByzantineReactor) GetRecvChan() chan *p2p.BufferedMsg {
+	return br.reactor.GetRecvChan()
+}

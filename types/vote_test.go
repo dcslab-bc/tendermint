@@ -1,6 +1,7 @@
 package types
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -8,11 +9,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	"github.com/tendermint/tendermint/crypto/tmhash"
-	"github.com/tendermint/tendermint/libs/protoio"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
+
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/crypto/ed25519"
+	"github.com/Finschia/ostracon/crypto/tmhash"
+	"github.com/Finschia/ostracon/libs/protoio"
 )
 
 func examplePrevote() *Vote {
@@ -215,6 +217,36 @@ func TestVoteVerify(t *testing.T) {
 	if assert.Error(t, err) {
 		assert.Equal(t, ErrVoteInvalidSignature, err)
 	}
+}
+
+func TestMaxVoteBytes(t *testing.T) {
+	// time is varint encoded so need to pick the max.
+	// year int, month Month, day, hour, min, sec, nsec int, loc *Location
+	timestamp := time.Date(math.MaxInt64, 0, 0, 0, 0, 0, math.MaxInt64, time.UTC)
+	vote := &Vote{
+		ValidatorAddress: crypto.AddressHash([]byte("validator_address")),
+		ValidatorIndex:   math.MaxInt32,
+		Height:           math.MaxInt64,
+		Round:            math.MaxInt32,
+		Timestamp:        timestamp,
+		Type:             tmproto.ProposalType,
+		BlockID: BlockID{
+			Hash: tmhash.Sum([]byte("blockID_hash")),
+			PartSetHeader: PartSetHeader{
+				Total: math.MaxInt32,
+				Hash:  tmhash.Sum([]byte("blockID_part_set_header_hash")),
+			},
+		},
+	}
+
+	privVal := NewMockPV()
+	pbVote := vote.ToProto()
+	err := privVal.SignVote("test_chain_id", pbVote)
+	require.NoError(t, err)
+
+	bz, err := pbVote.Marshal()
+	require.NoError(t, err)
+	assert.Equal(t, MaxVoteBytes, int64(len(bz)))
 }
 
 func TestVoteString(t *testing.T) {

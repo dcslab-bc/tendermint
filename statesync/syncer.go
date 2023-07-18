@@ -8,15 +8,16 @@ import (
 	"time"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/config"
-	"github.com/tendermint/tendermint/libs/log"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
-	"github.com/tendermint/tendermint/light"
-	"github.com/tendermint/tendermint/p2p"
 	ssproto "github.com/tendermint/tendermint/proto/tendermint/statesync"
-	"github.com/tendermint/tendermint/proxy"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/types"
+
+	"github.com/Finschia/ostracon/config"
+	"github.com/Finschia/ostracon/libs/log"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
+	"github.com/Finschia/ostracon/light"
+	"github.com/Finschia/ostracon/p2p"
+	"github.com/Finschia/ostracon/proxy"
+	sm "github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/types"
 )
 
 const (
@@ -136,9 +137,9 @@ func (s *syncer) RemovePeer(peer p2p.Peer) {
 }
 
 // SyncAny tries to sync any of the snapshots in the snapshot pool, waiting to discover further
-// snapshots if none were found and discoveryTime > 0. It returns the latest state and block commit
+// snapshots if none were found and discoveryTime > 0. It returns the latest state, previous state and block commit
 // which the caller must use to bootstrap the node.
-func (s *syncer) SyncAny(discoveryTime time.Duration, retryHook func()) (sm.State, *types.Commit, error) {
+func (s *syncer) SyncAny(discoveryTime time.Duration, retryHook func()) (sm.State, sm.State, *types.Commit, error) {
 	if discoveryTime != 0 && discoveryTime < minimumDiscoveryTime {
 		discoveryTime = 5 * minimumDiscoveryTime
 	}
@@ -163,7 +164,7 @@ func (s *syncer) SyncAny(discoveryTime time.Duration, retryHook func()) (sm.Stat
 		}
 		if snapshot == nil {
 			if discoveryTime == 0 {
-				return sm.State{}, nil, errNoSnapshots
+				return sm.State{}, sm.State{}, nil, errNoSnapshots
 			}
 			retryHook()
 			s.logger.Info(fmt.Sprintf("Discovering snapshots for %v", discoveryTime))
@@ -173,18 +174,18 @@ func (s *syncer) SyncAny(discoveryTime time.Duration, retryHook func()) (sm.Stat
 		if chunks == nil {
 			chunks, err = newChunkQueue(snapshot, s.tempDir)
 			if err != nil {
-				return sm.State{}, nil, fmt.Errorf("failed to create chunk queue: %w", err)
+				return sm.State{}, sm.State{}, nil, fmt.Errorf("failed to create chunk queue: %w", err)
 			}
 			defer chunks.Close() // in case we forget to close it elsewhere
 		}
 
-		newState, commit, err := s.Sync(snapshot, chunks)
+		newState, previousState, commit, err := s.Sync(snapshot, chunks)
 		switch {
 		case err == nil:
-			return newState, commit, nil
+			return newState, previousState, commit, nil
 
 		case errors.Is(err, errAbort):
-			return sm.State{}, nil, err
+			return sm.State{}, sm.State{}, nil, err
 
 		case errors.Is(err, errRetrySnapshot):
 			chunks.RetryAll()
@@ -219,7 +220,7 @@ func (s *syncer) SyncAny(discoveryTime time.Duration, retryHook func()) (sm.Stat
 			s.snapshots.Reject(snapshot)
 
 		default:
-			return sm.State{}, nil, fmt.Errorf("snapshot restoration failed: %w", err)
+			return sm.State{}, sm.State{}, nil, fmt.Errorf("snapshot restoration failed: %w", err)
 		}
 
 		// Discard snapshot and chunks for next iteration
@@ -232,13 +233,13 @@ func (s *syncer) SyncAny(discoveryTime time.Duration, retryHook func()) (sm.Stat
 	}
 }
 
-// Sync executes a sync for a specific snapshot, returning the latest state and block commit which
+// Sync executes a sync for a specific snapshot, returning the latest state, previous state and block commit which
 // the caller must use to bootstrap the node.
-func (s *syncer) Sync(snapshot *snapshot, chunks *chunkQueue) (sm.State, *types.Commit, error) {
+func (s *syncer) Sync(snapshot *snapshot, chunks *chunkQueue) (sm.State, sm.State, *types.Commit, error) {
 	s.mtx.Lock()
 	if s.chunks != nil {
 		s.mtx.Unlock()
-		return sm.State{}, nil, errors.New("a state sync is already in progress")
+		return sm.State{}, sm.State{}, nil, errors.New("a state sync is already in progress")
 	}
 	s.chunks = chunks
 	s.mtx.Unlock()
@@ -255,16 +256,16 @@ func (s *syncer) Sync(snapshot *snapshot, chunks *chunkQueue) (sm.State, *types.
 	if err != nil {
 		s.logger.Info("failed to fetch and verify app hash", "err", err)
 		if err == light.ErrNoWitnesses {
-			return sm.State{}, nil, err
+			return sm.State{}, sm.State{}, nil, err
 		}
-		return sm.State{}, nil, errRejectSnapshot
+		return sm.State{}, sm.State{}, nil, errRejectSnapshot
 	}
 	snapshot.trustedAppHash = appHash
 
 	// Offer snapshot to ABCI app.
 	err = s.offerSnapshot(snapshot)
 	if err != nil {
-		return sm.State{}, nil, err
+		return sm.State{}, sm.State{}, nil, err
 	}
 
 	// Spawn chunk fetchers. They will terminate when the chunk queue is closed or context cancelled.
@@ -280,37 +281,50 @@ func (s *syncer) Sync(snapshot *snapshot, chunks *chunkQueue) (sm.State, *types.
 	// Optimistically build new state, so we don't discover any light client failures at the end.
 	state, err := s.stateProvider.State(pctx, snapshot.Height)
 	if err != nil {
-		s.logger.Info("failed to fetch and verify tendermint state", "err", err)
+		s.logger.Info("failed to fetch and verify ostracon state", "err", err)
 		if err == light.ErrNoWitnesses {
-			return sm.State{}, nil, err
+			return sm.State{}, sm.State{}, nil, err
 		}
-		return sm.State{}, nil, errRejectSnapshot
+		return sm.State{}, sm.State{}, nil, errRejectSnapshot
+	}
+	var previousState sm.State
+	if snapshot.Height-1 < 1 {
+		previousState = sm.State{}
+	} else {
+		previousState, err = s.stateProvider.State(pctx, snapshot.Height-1)
+		if err != nil {
+			s.logger.Info("failed to fetch and verify ostracon previous state", "err", err)
+			if err == light.ErrNoWitnesses {
+				return sm.State{}, sm.State{}, nil, err
+			}
+			return sm.State{}, sm.State{}, nil, errRejectSnapshot
+		}
 	}
 	commit, err := s.stateProvider.Commit(pctx, snapshot.Height)
 	if err != nil {
 		s.logger.Info("failed to fetch and verify commit", "err", err)
 		if err == light.ErrNoWitnesses {
-			return sm.State{}, nil, err
+			return sm.State{}, sm.State{}, nil, err
 		}
-		return sm.State{}, nil, errRejectSnapshot
+		return sm.State{}, sm.State{}, nil, errRejectSnapshot
 	}
 
 	// Restore snapshot
 	err = s.applyChunks(chunks)
 	if err != nil {
-		return sm.State{}, nil, err
+		return sm.State{}, sm.State{}, nil, err
 	}
 
 	// Verify app and app version
 	if err := s.verifyApp(snapshot, state.Version.Consensus.App); err != nil {
-		return sm.State{}, nil, err
+		return sm.State{}, sm.State{}, nil, err
 	}
 
 	// Done! 🎉
 	s.logger.Info("Snapshot restored", "height", snapshot.Height, "format", snapshot.Format,
 		"hash", snapshot.Hash)
 
-	return state, commit, nil
+	return state, previousState, commit, nil
 }
 
 // offerSnapshot offers a snapshot to the app. It returns various errors depending on the app's
@@ -476,6 +490,8 @@ func (s *syncer) requestChunk(snapshot *snapshot, chunk uint32) {
 
 // verifyApp verifies the sync, checking the app hash, last block height and app version
 func (s *syncer) verifyApp(snapshot *snapshot, appVersion uint64) error {
+	// XXX Is it okay to check with "ABCI.Info" only
+	// since AppVersion will be updated by "ABCI.InitChain" and "ABCI.EndBlock"?
 	resp, err := s.connQuery.InfoSync(proxy.RequestInfo)
 	if err != nil {
 		return fmt.Errorf("failed to query ABCI app for appHash: %w", err)
@@ -484,7 +500,7 @@ func (s *syncer) verifyApp(snapshot *snapshot, appVersion uint64) error {
 	// sanity check that the app version in the block matches the application's own record
 	// of its version
 	if resp.AppVersion != appVersion {
-		// An error here most likely means that the app hasn't inplemented state sync
+		// An error here most likely means that the app hasn't implemented state sync
 		// or the Info call correctly
 		return fmt.Errorf("app version mismatch. Expected: %d, got: %d",
 			appVersion, resp.AppVersion)

@@ -7,24 +7,30 @@ import (
 	"time"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	mempl "github.com/tendermint/tendermint/mempool"
-	ctypes "github.com/tendermint/tendermint/rpc/core/types"
-	rpctypes "github.com/tendermint/tendermint/rpc/jsonrpc/types"
-	"github.com/tendermint/tendermint/types"
+
+	ocabci "github.com/Finschia/ostracon/abci/types"
+	mempl "github.com/Finschia/ostracon/mempool"
+	ctypes "github.com/Finschia/ostracon/rpc/core/types"
+	rpctypes "github.com/Finschia/ostracon/rpc/jsonrpc/types"
+	"github.com/Finschia/ostracon/types"
 )
 
 //-----------------------------------------------------------------------------
-// NOTE: tx should be signed, but this is only checked at the app level (not by Tendermint!)
+// NOTE: tx should be signed, but this is only checked at the app level (not by Ostracon!)
 
 // BroadcastTxAsync returns right away, with no response. Does not wait for
 // CheckTx nor DeliverTx results.
 // More: https://docs.tendermint.com/master/rpc/#/Tx/broadcast_tx_async
 func BroadcastTxAsync(ctx *rpctypes.Context, tx types.Tx) (*ctypes.ResultBroadcastTx, error) {
-	err := env.Mempool.CheckTx(tx, nil, mempl.TxInfo{})
-
+	chErr := make(chan error)
+	env.Mempool.CheckTxAsync(tx, mempl.TxInfo{}, func(err error) {
+		chErr <- err
+	}, nil)
+	err := <-chErr
 	if err != nil {
 		return nil, err
 	}
+
 	return &ctypes.ResultBroadcastTx{Hash: tx.Hash()}, nil
 }
 
@@ -32,21 +38,18 @@ func BroadcastTxAsync(ctx *rpctypes.Context, tx types.Tx) (*ctypes.ResultBroadca
 // DeliverTx result.
 // More: https://docs.tendermint.com/master/rpc/#/Tx/broadcast_tx_sync
 func BroadcastTxSync(ctx *rpctypes.Context, tx types.Tx) (*ctypes.ResultBroadcastTx, error) {
-	resCh := make(chan *abci.Response, 1)
-	err := env.Mempool.CheckTx(tx, func(res *abci.Response) {
-		resCh <- res
-	}, mempl.TxInfo{})
+	res, err := env.Mempool.CheckTxSync(tx, mempl.TxInfo{})
 	if err != nil {
 		return nil, err
 	}
-	res := <-resCh
 	r := res.GetCheckTx()
 	return &ctypes.ResultBroadcastTx{
-		Code:      r.Code,
-		Data:      r.Data,
-		Log:       r.Log,
-		Codespace: r.Codespace,
-		Hash:      tx.Hash(),
+		Code:         r.Code,
+		Data:         r.Data,
+		Log:          r.Log,
+		Codespace:    r.Codespace,
+		MempoolError: r.MempoolError,
+		Hash:         tx.Hash(),
 	}, nil
 }
 
@@ -77,18 +80,14 @@ func BroadcastTxCommit(ctx *rpctypes.Context, tx types.Tx) (*ctypes.ResultBroadc
 		}
 	}()
 
-	// Broadcast tx and wait for CheckTx result
-	checkTxResCh := make(chan *abci.Response, 1)
-	err = env.Mempool.CheckTx(tx, func(res *abci.Response) {
-		checkTxResCh <- res
-	}, mempl.TxInfo{})
+	// Broadcast tx and check tx
+	checkTxResMsg, err := env.Mempool.CheckTxSync(tx, mempl.TxInfo{})
 	if err != nil {
 		env.Logger.Error("Error on broadcastTxCommit", "err", err)
 		return nil, fmt.Errorf("error on broadcastTxCommit: %v", err)
 	}
-	checkTxResMsg := <-checkTxResCh
 	checkTxRes := checkTxResMsg.GetCheckTx()
-	if checkTxRes.Code != abci.CodeTypeOK {
+	if checkTxRes.Code != ocabci.CodeTypeOK {
 		return &ctypes.ResultBroadcastTxCommit{
 			CheckTx:   *checkTxRes,
 			DeliverTx: abci.ResponseDeliverTx{},
@@ -109,7 +108,7 @@ func BroadcastTxCommit(ctx *rpctypes.Context, tx types.Tx) (*ctypes.ResultBroadc
 	case <-deliverTxSub.Cancelled():
 		var reason string
 		if deliverTxSub.Err() == nil {
-			reason = "Tendermint exited"
+			reason = "Ostracon exited"
 		} else {
 			reason = deliverTxSub.Err().Error()
 		}

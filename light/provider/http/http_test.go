@@ -10,13 +10,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/abci/example/kvstore"
-	"github.com/tendermint/tendermint/light/provider"
-	lighthttp "github.com/tendermint/tendermint/light/provider/http"
-	rpcclient "github.com/tendermint/tendermint/rpc/client"
-	rpchttp "github.com/tendermint/tendermint/rpc/client/http"
-	rpctest "github.com/tendermint/tendermint/rpc/test"
-	"github.com/tendermint/tendermint/types"
+	"github.com/Finschia/ostracon/abci/example/kvstore"
+	"github.com/Finschia/ostracon/light/provider"
+	lighthttp "github.com/Finschia/ostracon/light/provider/http"
+	rpcclient "github.com/Finschia/ostracon/rpc/client"
+	rpchttp "github.com/Finschia/ostracon/rpc/client/http"
+	rpcjson "github.com/Finschia/ostracon/rpc/jsonrpc/client"
+	rpctest "github.com/Finschia/ostracon/rpc/test"
+	"github.com/Finschia/ostracon/types"
 )
 
 func TestNewProvider(t *testing.T) {
@@ -36,7 +37,7 @@ func TestNewProvider(t *testing.T) {
 func TestProvider(t *testing.T) {
 	app := kvstore.NewApplication()
 	app.RetainBlocks = 10
-	node := rpctest.StartTendermint(app)
+	node := rpctest.StartOstracon(app)
 
 	cfg := rpctest.GetConfig()
 	defer os.RemoveAll(cfg.RootDir)
@@ -45,7 +46,9 @@ func TestProvider(t *testing.T) {
 	require.NoError(t, err)
 	chainID := genDoc.ChainID
 
-	c, err := rpchttp.New(rpcAddr, "/websocket")
+	jsonClient, err := rpcjson.HTTPClientForTest(rpcAddr)
+	require.Nil(t, err)
+	c, err := rpchttp.NewWithClient(rpcAddr, "/websocket", jsonClient)
 	require.Nil(t, err)
 
 	p := lighthttp.NewWithClient(chainID, c)
@@ -83,8 +86,8 @@ func TestProvider(t *testing.T) {
 	assert.Equal(t, provider.ErrLightBlockNotFound, err)
 
 	// stop the full node and check that a no response error is returned
-	rpctest.StopTendermint(node)
-	time.Sleep(10 * time.Second)
+	rpctest.StopOstracon(node)
+	time.Sleep(1 * time.Second) // depends on Transport.IdleConnTimeout
 	lb, err = p.LightBlock(context.Background(), lower+2)
 	// we should see a connection refused
 	require.Error(t, err)

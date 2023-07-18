@@ -5,16 +5,20 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	dbm "github.com/tendermint/tm-db"
-
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/crypto/tmhash"
 	tmstate "github.com/tendermint/tendermint/proto/tendermint/state"
 	tmversion "github.com/tendermint/tendermint/proto/tendermint/version"
-	"github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/state/mocks"
-	"github.com/tendermint/tendermint/types"
-	"github.com/tendermint/tendermint/version"
+	dbm "github.com/tendermint/tm-db"
+
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/crypto/tmhash"
+	"github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/state/mocks"
+	"github.com/Finschia/ostracon/types"
+	"github.com/Finschia/ostracon/version"
+)
+
+var (
+	proofHash = []byte{0}
 )
 
 func TestRollback(t *testing.T) {
@@ -95,12 +99,18 @@ func TestRollbackNoBlocks(t *testing.T) {
 	stateStore := setupStateStore(t, height)
 	blockStore := &mocks.BlockStore{}
 	blockStore.On("Height").Return(height)
-	blockStore.On("LoadBlockMeta", height).Return(nil)
-	blockStore.On("LoadBlockMeta", height-1).Return(nil)
+	blockStore.On("LoadBlockMeta", height-1).Once().Return(nil)
 
 	_, _, err := state.Rollback(blockStore, stateStore)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "block at height 99 not found")
+	require.Contains(t, err.Error(), "block at RollbackHeight 99 not found")
+
+	blockStore.On("LoadBlockMeta", height-1).Once().Return(&types.BlockMeta{})
+	blockStore.On("LoadBlockMeta", height).Return(nil)
+
+	_, _, err = state.Rollback(blockStore, stateStore)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "block at LastBlockHeight 100 not found")
 }
 
 func TestRollbackDifferentStateHeight(t *testing.T) {
@@ -116,7 +126,11 @@ func TestRollbackDifferentStateHeight(t *testing.T) {
 
 func setupStateStore(t *testing.T, height int64) state.Store {
 	stateStore := state.NewStore(dbm.NewMemDB())
-	valSet, _ := types.RandValidatorSet(5, 10)
+
+	previousValSet, _ := types.RandValidatorSet(5, 10)
+	lastValSet := previousValSet.CopyIncrementProposerPriority(1)
+	initialValSet := lastValSet.CopyIncrementProposerPriority(1)
+	nextValSet := initialValSet.CopyIncrementProposerPriority(1)
 
 	params := types.DefaultConsensusParams()
 	params.Version.AppVersion = 10
@@ -127,7 +141,7 @@ func setupStateStore(t *testing.T, height int64) state.Store {
 				Block: version.BlockProtocol,
 				App:   10,
 			},
-			Software: version.TMCoreSemVer,
+			Software: version.OCCoreSemVer,
 		},
 		ChainID:                          "test-chain",
 		InitialHeight:                    10,
@@ -135,13 +149,25 @@ func setupStateStore(t *testing.T, height int64) state.Store {
 		AppHash:                          tmhash.Sum([]byte("app_hash")),
 		LastResultsHash:                  tmhash.Sum([]byte("last_results_hash")),
 		LastBlockHeight:                  height,
-		LastValidators:                   valSet,
-		Validators:                       valSet.CopyIncrementProposerPriority(1),
-		NextValidators:                   valSet.CopyIncrementProposerPriority(2),
+		LastValidators:                   lastValSet,
+		Validators:                       initialValSet,
+		NextValidators:                   nextValSet,
 		LastHeightValidatorsChanged:      height + 1,
 		ConsensusParams:                  *params,
 		LastHeightConsensusParamsChanged: height + 1,
+		LastProofHash:                    proofHash,
 	}
+
+	// Need to set previous initial state for VRF verify
+	previousState := initialState.Copy()
+	previousState.LastBlockHeight = initialState.LastBlockHeight - 1
+	previousState.LastHeightConsensusParamsChanged = initialState.LastHeightConsensusParamsChanged - 1
+	previousState.LastHeightValidatorsChanged = initialState.LastHeightValidatorsChanged - 1
+	previousState.LastValidators = previousValSet
+	previousState.Validators = lastValSet
+	previousState.NextValidators = initialValSet
+	require.NoError(t, stateStore.Bootstrap(previousState))
+
 	require.NoError(t, stateStore.Bootstrap(initialState))
 	return stateStore
 }

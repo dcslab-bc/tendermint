@@ -10,12 +10,29 @@ import (
 	"time"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/crypto/merkle"
-	"github.com/tendermint/tendermint/crypto/tmhash"
-	tmjson "github.com/tendermint/tendermint/libs/json"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
+
+	"github.com/Finschia/ostracon/crypto/merkle"
+	"github.com/Finschia/ostracon/crypto/tmhash"
+	tmjson "github.com/Finschia/ostracon/libs/json"
+	tmrand "github.com/Finschia/ostracon/libs/rand"
 )
+
+func MaxEvidenceBytes(ev Evidence) int64 {
+	switch ev := ev.(type) {
+	case *DuplicateVoteEvidence:
+		return (1 + MaxVoteBytes + 2) + // VoteA
+			(1 + MaxVoteBytes + 2) + // VoteB
+			(1 + 9) + // TotalVotingPower
+			(1 + 9) + // ValidatorPower
+			(1 + 17 + 1) // Timestamp
+	case *LightClientAttackEvidence:
+		// FIXME 🏺 need this?
+		return 0
+	default:
+		panic(fmt.Sprintf("unsupported evidence: %+v", ev))
+	}
+}
 
 // Evidence represents any provable malicious activity by a validator.
 // Verification logic for each evidence is part of the evidence module.
@@ -205,7 +222,7 @@ func (l *LightClientAttackEvidence) ABCI() []abci.Evidence {
 	for idx, val := range l.ByzantineValidators {
 		abciEv[idx] = abci.Evidence{
 			Type:             abci.EvidenceType_LIGHT_CLIENT_ATTACK,
-			Validator:        TM2PB.Validator(val),
+			Validator:        OC2PB.Validator(val),
 			Height:           l.Height(),
 			Time:             l.Timestamp,
 			TotalVotingPower: l.TotalVotingPower,
@@ -288,7 +305,6 @@ func (l *LightClientAttackEvidence) ConflictingHeaderIsInvalid(trustedHeader *He
 		!bytes.Equal(trustedHeader.ConsensusHash, l.ConflictingBlock.ConsensusHash) ||
 		!bytes.Equal(trustedHeader.AppHash, l.ConflictingBlock.AppHash) ||
 		!bytes.Equal(trustedHeader.LastResultsHash, l.ConflictingBlock.LastResultsHash)
-
 }
 
 // Hash returns the hash of the header and the commonHeight. This is designed to cause hash collisions
@@ -318,10 +334,10 @@ func (l *LightClientAttackEvidence) Height() int64 {
 // String returns a string representation of LightClientAttackEvidence
 func (l *LightClientAttackEvidence) String() string {
 	return fmt.Sprintf(`LightClientAttackEvidence{
-		ConflictingBlock: %v, 
-		CommonHeight: %d, 
-		ByzatineValidators: %v, 
-		TotalVotingPower: %d, 
+		ConflictingBlock: %v,
+		CommonHeight: %d,
+		ByzatineValidators: %v,
+		TotalVotingPower: %d,
 		Timestamp: %v}#%X`,
 		l.ConflictingBlock.String(), l.CommonHeight, l.ByzantineValidators,
 		l.TotalVotingPower, l.Timestamp, l.Hash())
@@ -511,8 +527,8 @@ func EvidenceFromProto(evidence *tmproto.Evidence) (Evidence, error) {
 }
 
 func init() {
-	tmjson.RegisterType(&DuplicateVoteEvidence{}, "tendermint/DuplicateVoteEvidence")
-	tmjson.RegisterType(&LightClientAttackEvidence{}, "tendermint/LightClientAttackEvidence")
+	tmjson.RegisterType(&DuplicateVoteEvidence{}, "ostracon/DuplicateVoteEvidence")
+	tmjson.RegisterType(&LightClientAttackEvidence{}, "ostracon/LightClientAttackEvidence")
 }
 
 //-------------------------------------------- ERRORS --------------------------------------

@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tendermint/tendermint/crypto"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	"github.com/tendermint/tendermint/types"
+
+	"github.com/Finschia/ostracon/crypto"
+	"github.com/Finschia/ostracon/types"
 )
 
 // RetrySignerClient wraps SignerClient adding retry for each operation (except
@@ -39,10 +40,6 @@ func (sc *RetrySignerClient) WaitForConnection(maxWait time.Duration) error {
 
 //--------------------------------------------------------
 // Implement PrivValidator
-
-func (sc *RetrySignerClient) Ping() error {
-	return sc.next.Ping()
-}
 
 func (sc *RetrySignerClient) GetPubKey() (crypto.PubKey, error) {
 	var (
@@ -93,4 +90,17 @@ func (sc *RetrySignerClient) SignProposal(chainID string, proposal *tmproto.Prop
 		time.Sleep(sc.timeout)
 	}
 	return fmt.Errorf("exhausted all attempts to sign proposal: %w", err)
+}
+
+func (sc *RetrySignerClient) GenerateVRFProof(message []byte) (crypto.Proof, error) {
+	var err error
+	var proof crypto.Proof
+	for i := 0; i < sc.retries || sc.retries == 0; i++ {
+		proof, err = sc.next.GenerateVRFProof(message)
+		if err == nil {
+			return proof, nil
+		}
+		time.Sleep(sc.timeout)
+	}
+	return proof, fmt.Errorf("exhausted all attempts to generate vrf proof: %w", err)
 }

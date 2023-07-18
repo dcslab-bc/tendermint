@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
+	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -15,29 +17,28 @@ import (
 	"github.com/go-kit/log/term"
 	"github.com/stretchr/testify/require"
 
-	"path"
-
+	abci "github.com/tendermint/tendermint/abci/types"
+	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	dbm "github.com/tendermint/tm-db"
 
-	abcicli "github.com/tendermint/tendermint/abci/client"
-	"github.com/tendermint/tendermint/abci/example/counter"
-	"github.com/tendermint/tendermint/abci/example/kvstore"
-	abci "github.com/tendermint/tendermint/abci/types"
-	cfg "github.com/tendermint/tendermint/config"
-	cstypes "github.com/tendermint/tendermint/consensus/types"
-	tmbytes "github.com/tendermint/tendermint/libs/bytes"
-	"github.com/tendermint/tendermint/libs/log"
-	tmos "github.com/tendermint/tendermint/libs/os"
-	tmpubsub "github.com/tendermint/tendermint/libs/pubsub"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
-	mempl "github.com/tendermint/tendermint/mempool"
-	"github.com/tendermint/tendermint/p2p"
-	"github.com/tendermint/tendermint/privval"
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/store"
-	"github.com/tendermint/tendermint/types"
-	tmtime "github.com/tendermint/tendermint/types/time"
+	abcicli "github.com/Finschia/ostracon/abci/client"
+	"github.com/Finschia/ostracon/abci/example/counter"
+	"github.com/Finschia/ostracon/abci/example/kvstore"
+	ocabci "github.com/Finschia/ostracon/abci/types"
+	cfg "github.com/Finschia/ostracon/config"
+	cstypes "github.com/Finschia/ostracon/consensus/types"
+	tmbytes "github.com/Finschia/ostracon/libs/bytes"
+	"github.com/Finschia/ostracon/libs/log"
+	tmos "github.com/Finschia/ostracon/libs/os"
+	tmpubsub "github.com/Finschia/ostracon/libs/pubsub"
+	tmsync "github.com/Finschia/ostracon/libs/sync"
+	mempl "github.com/Finschia/ostracon/mempool"
+	"github.com/Finschia/ostracon/p2p"
+	"github.com/Finschia/ostracon/privval"
+	sm "github.com/Finschia/ostracon/state"
+	"github.com/Finschia/ostracon/store"
+	"github.com/Finschia/ostracon/types"
+	tmtime "github.com/Finschia/ostracon/types/time"
 )
 
 const (
@@ -49,11 +50,9 @@ const (
 type cleanupFunc func()
 
 // genesis, chain_id, priv_val
-var (
-	config                *cfg.Config // NOTE: must be reset for each _test.go file
-	consensusReplayConfig *cfg.Config
-	ensureTimeout         = time.Millisecond * 200
-)
+var config *cfg.Config // NOTE: must be reset for each _test.go file
+var consensusReplayConfig *cfg.Config
+var ensureTimeout = time.Millisecond * 200
 
 func ensureDir(dir string, mode os.FileMode) {
 	if err := tmos.EnsureDir(dir, mode); err != nil {
@@ -205,7 +204,7 @@ func decideProposal(
 	round int32,
 ) (proposal *types.Proposal, block *types.Block) {
 	cs1.mtx.Lock()
-	block, blockParts := cs1.createProposalBlock()
+	block, blockParts := createProposalBlockSlim(cs1, vs, round)
 	validRound := cs1.ValidRound
 	chainID := cs1.state.ChainID
 	cs1.mtx.Unlock()
@@ -223,7 +222,26 @@ func decideProposal(
 
 	proposal.Signature = p.Signature
 
-	return
+	return proposal, block
+}
+
+// createProposalBlockSlim is copy from consensus/state.go:createProposalBlock and slimmed down
+func createProposalBlockSlim(cs *State, vs *validatorStub, round int32) (*types.Block, *types.PartSet) {
+	var commit *types.Commit
+	if cs.Height == 1 {
+		commit = types.NewCommit(0, 0, types.BlockID{}, nil)
+	} else {
+		commit = cs.LastCommit.MakeCommit()
+	}
+	pubKey, _ := vs.GetPubKey()
+	proposerAddr := pubKey.Address()
+	message := cs.state.MakeHashMessage(round)
+	proof, err := vs.GenerateVRFProof(message)
+	if err != nil {
+		cs.Logger.Error("enterPropose: Cannot generate vrf proof: %s", err.Error())
+		return nil, nil
+	}
+	return cs.blockExec.CreateProposalBlock(cs.Height, cs.state, commit, proposerAddr, round, proof, 0)
 }
 
 func addVotes(to *State, votes ...*types.Vote) {
@@ -258,7 +276,8 @@ func validatePrevote(t *testing.T, cs *State, round int32, privVal *validatorStu
 		}
 	} else {
 		if !bytes.Equal(vote.BlockID.Hash, blockHash) {
-			panic(fmt.Sprintf("Expected prevote to be for %X, got %X", blockHash, vote.BlockID.Hash))
+			panic(fmt.Sprintf("Expected prevote to be for %X, got %X; address=%X, prevotes=%+v, vote=%+v, blockId=%+v",
+				blockHash, vote.BlockID.Hash, address, prevotes, vote, vote.BlockID))
 		}
 	}
 }
@@ -363,7 +382,7 @@ func subscribeToVoter(cs *State, addr []byte) <-chan tmpubsub.Message {
 //-------------------------------------------------------------------------------
 // consensus states
 
-func newState(state sm.State, pv types.PrivValidator, app abci.Application) *State {
+func newState(state sm.State, pv types.PrivValidator, app ocabci.Application) *State {
 	config := cfg.ResetTestRoot("consensus_state_test")
 	return newStateWithConfig(config, state, pv, app)
 }
@@ -372,7 +391,7 @@ func newStateWithConfig(
 	thisConfig *cfg.Config,
 	state sm.State,
 	pv types.PrivValidator,
-	app abci.Application,
+	app ocabci.Application,
 ) *State {
 	blockDB := dbm.NewMemDB()
 	return newStateWithConfigAndBlockStore(thisConfig, state, pv, app, blockDB)
@@ -382,8 +401,19 @@ func newStateWithConfigAndBlockStore(
 	thisConfig *cfg.Config,
 	state sm.State,
 	pv types.PrivValidator,
-	app abci.Application,
+	app ocabci.Application,
 	blockDB dbm.DB,
+) *State {
+	return newStateWithConfigAndBlockStoreWithLoggers(thisConfig, state, pv, app, blockDB, DefaultTestLoggers())
+}
+
+func newStateWithConfigAndBlockStoreWithLoggers(
+	thisConfig *cfg.Config,
+	state sm.State,
+	pv types.PrivValidator,
+	app ocabci.Application,
+	blockDB dbm.DB,
+	loggers TestLoggers,
 ) *State {
 	// Get BlockStore
 	blockStore := store.NewBlockStore(blockDB)
@@ -395,7 +425,7 @@ func newStateWithConfigAndBlockStore(
 
 	// Make Mempool
 	mempool := mempl.NewCListMempool(thisConfig.Mempool, proxyAppConnMem, 0)
-	mempool.SetLogger(log.TestingLogger().With("module", "mempool"))
+	mempool.SetLogger(loggers.memLogger.With("module", "mempool"))
 	if thisConfig.Consensus.WaitForTxs() {
 		mempool.EnableTxsAvailable()
 	}
@@ -409,13 +439,13 @@ func newStateWithConfigAndBlockStore(
 		panic(err)
 	}
 
-	blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyAppConnCon, mempool, evpool)
+	blockExec := sm.NewBlockExecutor(stateStore, loggers.execLogger, proxyAppConnCon, mempool, evpool)
 	cs := NewState(thisConfig.Consensus, state, blockExec, blockStore, mempool, evpool)
-	cs.SetLogger(log.TestingLogger().With("module", "consensus"))
+	cs.SetLogger(loggers.csLogger.With("module", "consensus"))
 	cs.SetPrivValidator(pv)
 
 	eventBus := types.NewEventBus()
-	eventBus.SetLogger(log.TestingLogger().With("module", "events"))
+	eventBus.SetLogger(loggers.eventLogger.With("module", "events"))
 	err := eventBus.Start()
 	if err != nil {
 		panic(err)
@@ -434,12 +464,17 @@ func loadPrivValidator(config *cfg.Config) *privval.FilePV {
 }
 
 func randState(nValidators int) (*State, []*validatorStub) {
+	return randStateWithApp(nValidators, counter.NewApplication(true))
+}
+
+func randStateWithApp(nValidators int, app ocabci.Application) (*State, []*validatorStub) {
 	// Get State
 	state, privVals := randGenesisState(nValidators, false, 10)
+	state.LastProofHash = []byte{2}
 
 	vss := make([]*validatorStub, nValidators)
 
-	cs := newState(state, privVals[0], counter.NewApplication(true))
+	cs := newState(state, privVals[0], app)
 
 	for i := 0; i < nValidators; i++ {
 		vss[i] = newValidatorStub(privVals[i], int32(i))
@@ -448,6 +483,48 @@ func randState(nValidators int) (*State, []*validatorStub) {
 	incrementHeight(vss[1:]...)
 
 	return cs, vss
+}
+
+func theOthers(index int) int {
+	const theOtherIndex = math.MaxInt32
+	return theOtherIndex - index
+}
+
+func forceProposer(cs *State, vals []*validatorStub, index []int, height []int64, round []int32) {
+	for i := 0; i < 5000; i++ {
+		allMatch := true
+		firstHash := []byte{byte(i)}
+		currentHash := firstHash
+		for j := 0; j < len(index); j++ {
+			var curVal *validatorStub
+			var mustBe bool
+			if index[j] < len(vals) {
+				curVal = vals[index[j]]
+				mustBe = true
+			} else {
+				curVal = vals[theOthers(index[j])]
+				mustBe = false
+			}
+			pubKey, _ := curVal.GetPubKey()
+			if pubKey.Equals(cs.Validators.SelectProposer(currentHash, height[j], round[j]).PubKey) !=
+				mustBe {
+				allMatch = false
+				break
+			}
+			if j+1 < len(height) && height[j+1] > height[j] {
+				message := types.MakeRoundHash(currentHash, height[j]-1, round[j])
+				proof, _ := curVal.PrivValidator.GenerateVRFProof(message)
+				pubKey, _ := curVal.PrivValidator.GetPubKey()
+				currentHash, _ = pubKey.VRFVerify(proof, message)
+			}
+		}
+		if allMatch {
+			cs.state.LastProofHash = firstHash
+			return
+		}
+	}
+	panic("Unfortunately, there is no such LastProofHash making index validator to be proposer. " +
+		"Please re-run the test since find LastProofHash")
 }
 
 //-------------------------------------------------------------------------------
@@ -494,7 +571,7 @@ func ensureNoNewTimeout(stepCh <-chan tmpubsub.Message, timeout int64) {
 func ensureNewEvent(ch <-chan tmpubsub.Message, height int64, round int32, timeout time.Duration, errorMessage string) {
 	select {
 	case <-time.After(timeout):
-		panic(errorMessage)
+		panic(fmt.Sprintf("%s: %d nsec", errorMessage, timeout))
 	case msg := <-ch:
 		roundStateEvent, ok := msg.Data().(types.EventDataRoundState)
 		if !ok {
@@ -673,6 +750,34 @@ func ensureNewEventOnChannel(ch <-chan tmpubsub.Message) {
 //-------------------------------------------------------------------------------
 // consensus nets
 
+type TestLoggers struct {
+	memLogger   log.Logger
+	evLogger    log.Logger
+	execLogger  log.Logger
+	csLogger    log.Logger
+	eventLogger log.Logger
+}
+
+func NewTestLoggers(memLogger, evLogger, execLogger, csLogger, eventLogger log.Logger) TestLoggers {
+	return TestLoggers{
+		memLogger:   memLogger,
+		evLogger:    evLogger,
+		execLogger:  execLogger,
+		csLogger:    csLogger,
+		eventLogger: eventLogger,
+	}
+}
+
+func DefaultTestLoggers() TestLoggers {
+	return NewTestLoggers(
+		log.TestingLogger(), log.TestingLogger(), log.TestingLogger(), log.TestingLogger(), log.TestingLogger())
+}
+
+func NopTestLoggers() TestLoggers {
+	return NewTestLoggers(
+		log.NewNopLogger(), log.NewNopLogger(), log.NewNopLogger(), log.NewNopLogger(), log.NewNopLogger())
+}
+
 // consensusLogger is a TestingLogger which uses a different
 // color for each validator ("validator" key must exist).
 func consensusLogger() log.Logger {
@@ -687,7 +792,7 @@ func consensusLogger() log.Logger {
 }
 
 func randConsensusNet(nValidators int, testName string, tickerFunc func() TimeoutTicker,
-	appFunc func() abci.Application, configOpts ...func(*cfg.Config)) ([]*State, cleanupFunc) {
+	appFunc func() ocabci.Application, configOpts ...func(*cfg.Config)) ([]*State, cleanupFunc) {
 	genDoc, privVals := randGenesisDoc(nValidators, false, 30)
 	css := make([]*State, nValidators)
 	logger := consensusLogger()
@@ -695,7 +800,12 @@ func randConsensusNet(nValidators int, testName string, tickerFunc func() Timeou
 	for i := 0; i < nValidators; i++ {
 		stateDB := dbm.NewMemDB() // each state needs its own db
 		stateStore := sm.NewStore(stateDB)
-		state, _ := stateStore.LoadFromDBOrGenesisDoc(genDoc)
+		state, err := stateStore.LoadFromDBOrGenesisDoc(genDoc)
+		if err != nil {
+			panic(fmt.Errorf("error constructing state from genesis file: %w", err))
+		}
+		// set the first peer to become the first proposer
+		state.LastProofHash = []byte{2}
 		thisConfig := ResetConfig(fmt.Sprintf("%s_%d", testName, i))
 		configRootDirs = append(configRootDirs, thisConfig.RootDir)
 		for _, opt := range configOpts {
@@ -703,7 +813,7 @@ func randConsensusNet(nValidators int, testName string, tickerFunc func() Timeou
 		}
 		ensureDir(filepath.Dir(thisConfig.Consensus.WalFile()), 0700) // dir for wal
 		app := appFunc()
-		vals := types.TM2PB.ValidatorUpdates(state.Validators)
+		vals := types.OC2PB.ValidatorUpdates(state.Validators)
 		app.InitChain(abci.RequestInitChain{Validators: vals})
 
 		css[i] = newStateWithConfigAndBlockStore(thisConfig, state, privVals[i], app, stateDB)
@@ -723,9 +833,22 @@ func randConsensusNetWithPeers(
 	nPeers int,
 	testName string,
 	tickerFunc func() TimeoutTicker,
-	appFunc func(string) abci.Application,
+	appFunc func(string) ocabci.Application,
 ) ([]*State, *types.GenesisDoc, *cfg.Config, cleanupFunc) {
 	genDoc, privVals := randGenesisDoc(nValidators, false, testMinPower)
+	css, peer0Config, configRootDirs := createPeersAndValidators(nValidators, nPeers, testName,
+		genDoc, privVals, tickerFunc, appFunc)
+
+	return css, genDoc, peer0Config, func() {
+		for _, dir := range configRootDirs {
+			os.RemoveAll(dir)
+		}
+	}
+}
+
+func createPeersAndValidators(nValidators, nPeers int, testName string,
+	genDoc *types.GenesisDoc, privVals []types.PrivValidator, tickerFunc func() TimeoutTicker,
+	appFunc func(string) ocabci.Application) ([]*State, *cfg.Config, []string) {
 	css := make([]*State, nPeers)
 	logger := consensusLogger()
 	var peer0Config *cfg.Config
@@ -757,7 +880,7 @@ func randConsensusNetWithPeers(
 		}
 
 		app := appFunc(path.Join(config.DBDir(), fmt.Sprintf("%s_%d", testName, i)))
-		vals := types.TM2PB.ValidatorUpdates(state.Validators)
+		vals := types.OC2PB.ValidatorUpdates(state.Validators)
 		if _, ok := app.(*kvstore.PersistentKVStoreApplication); ok {
 			// simulate handshake, receive app version. If don't do this, replay test will fail
 			state.Version.Consensus.App = kvstore.ProtocolVersion
@@ -769,11 +892,8 @@ func randConsensusNetWithPeers(
 		css[i].SetTimeoutTicker(tickerFunc())
 		css[i].SetLogger(logger.With("validator", i, "module", "consensus"))
 	}
-	return css, genDoc, peer0Config, func() {
-		for _, dir := range configRootDirs {
-			os.RemoveAll(dir)
-		}
-	}
+
+	return css, peer0Config, configRootDirs
 }
 
 func getSwitchIndex(switches []*p2p.Switch, peer p2p.Peer) int {
@@ -785,9 +905,8 @@ func getSwitchIndex(switches []*p2p.Switch, peer p2p.Peer) int {
 	panic("didnt find peer in switches")
 }
 
-//-------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------
 // genesis
-
 func randGenesisDoc(numValidators int, randPower bool, minPower int64) (*types.GenesisDoc, []types.PrivValidator) {
 	validators := make([]types.GenesisValidator, numValidators)
 	privValidators := make([]types.PrivValidator, numValidators)
@@ -865,11 +984,11 @@ func (*mockTicker) SetLogger(log.Logger) {}
 
 //------------------------------------
 
-func newCounter() abci.Application {
+func newCounter() ocabci.Application {
 	return counter.NewApplication(true)
 }
 
-func newPersistentKVStore() abci.Application {
+func newPersistentKVStore() ocabci.Application {
 	dir, err := ioutil.TempDir("", "persistent-kvstore")
 	if err != nil {
 		panic(err)
@@ -877,7 +996,7 @@ func newPersistentKVStore() abci.Application {
 	return kvstore.NewPersistentKVStoreApplication(dir)
 }
 
-func newPersistentKVStoreWithPath(dbDir string) abci.Application {
+func newPersistentKVStoreWithPath(dbDir string) ocabci.Application {
 	return kvstore.NewPersistentKVStoreApplication(dbDir)
 }
 
