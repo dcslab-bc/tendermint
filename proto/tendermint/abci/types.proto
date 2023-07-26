@@ -36,6 +36,8 @@ message Request {
     RequestOfferSnapshot      offer_snapshot       = 13;
     RequestLoadSnapshotChunk  load_snapshot_chunk  = 14;
     RequestApplySnapshotChunk apply_snapshot_chunk = 15;
+    RequestBeginRecheckTx     begin_recheck_tx     = 1000;
+    RequestEndRecheckTx       end_recheck_tx       = 1001;
   }
 }
 
@@ -124,6 +126,15 @@ message RequestApplySnapshotChunk {
   string sender = 3;
 }
 
+// 230724_HJSONG_EXP_START
+message RequestBeginRecheckTx {
+  tendermint.types.Header header = 1 [(gogoproto.nullable) = false];
+}
+
+message RequestEndRecheckTx {
+  int64 height = 1;
+} // EXP_END
+
 //----------------------------------------
 // Response types
 
@@ -145,6 +156,10 @@ message Response {
     ResponseOfferSnapshot      offer_snapshot       = 14;
     ResponseLoadSnapshotChunk  load_snapshot_chunk  = 15;
     ResponseApplySnapshotChunk apply_snapshot_chunk = 16;
+    // 230724_HJSONG_EXP_START
+    ResponseBeginRecheckTx     begin_recheck_tx     = 1000;
+    ResponseEndRecheckTx       end_recheck_tx       = 1001;
+    // EXP_END
   }
 }
 
@@ -282,6 +297,15 @@ message ResponseApplySnapshotChunk {
   }
 }
 
+// 230724_HJSONG_EXP_START
+message ResponseBeginRecheckTx {
+  uint32 code = 1;
+}
+
+message ResponseEndRecheckTx {
+  uint32 code = 1;
+} // EXP_END
+
 //----------------------------------------
 // Misc.
 
@@ -410,4 +434,6 @@ service ABCIApplication {
       returns (ResponseLoadSnapshotChunk);
   rpc ApplySnapshotChunk(RequestApplySnapshotChunk)
       returns (ResponseApplySnapshotChunk);
+  rpc BeginRecheckTx(RequestBeginRecheckTx) returns (ResponseBeginRecheckTx);
+  rpc EndRecheckTx(RequestEndRecheckTx) returns (ResponseEndRecheckTx);
 }

@@ -98,8 +98,9 @@ func (app *localClient) DeliverTxAsync(params types.RequestDeliverTx) *ReqRes {
 }
 
 func (app *localClient) CheckTxAsync(req types.RequestCheckTx) *ReqRes {
-	app.mtx.Lock()
-	defer app.mtx.Unlock()
+	// 230724_HJSONG_EXP_START
+	// app.mtx.Lock()
+	// defer app.mtx.Unlock() // EXP_END
 
 	res := app.Application.CheckTx(req)
 	return app.callback(
@@ -207,6 +208,23 @@ func (app *localClient) ApplySnapshotChunkAsync(req types.RequestApplySnapshotCh
 	)
 }
 
+// 230724_HJSONG_EXP_START
+func (app *localClient) BeginRecheckTxAsync(req types.RequestBeginRecheckTx) *ReqRes {
+	res := app.Application.BeginRecheckTx(req)
+	return app.callback(
+		types.ToRequestBeginRecheckTx(req),
+		types.ToResponseBeginRecheckTx(res),
+	)
+}
+
+func (app *localClient) EndRecheckTxAsync(req types.RequestEndRecheckTx) *ReqRes {
+	res := app.Application.EndRecheckTx(req)
+	return app.callback(
+		types.ToRequestEndRecheckTx(req),
+		types.ToResponseEndRecheckTx(res),
+	)
+} // EXP_END
+
 //-------------------------------------------------------
 
 func (app *localClient) FlushSync() error {
@@ -242,8 +260,9 @@ func (app *localClient) DeliverTxSync(req types.RequestDeliverTx) (*types.Respon
 }
 
 func (app *localClient) CheckTxSync(req types.RequestCheckTx) (*types.ResponseCheckTx, error) {
-	app.mtx.Lock()
-	defer app.mtx.Unlock()
+	// 230724_HJSONG_EXP_START
+	// app.mtx.Lock()
+	// defer app.mtx.Unlock() // EXP_END
 
 	res := app.Application.CheckTx(req)
 	return &res, nil
@@ -322,6 +341,17 @@ func (app *localClient) ApplySnapshotChunkSync(
 	res := app.Application.ApplySnapshotChunk(req)
 	return &res, nil
 }
+
+// 230724_HJSONG_EXP_START
+func (app *localClient) BeginRecheckTxSync(req types.RequestBeginRecheckTx) (*types.ResponseBeginRecheckTx, error) {
+	res := app.Application.BeginRecheckTx(req)
+	return &res, nil
+}
+
+func (app *localClient) EndRecheckTxSync(req types.RequestEndRecheckTx) (*types.ResponseEndRecheckTx, error) {
+	res := app.Application.EndRecheckTx(req)
+	return &res, nil
+} // EXP_END
 
 //-------------------------------------------------------
 

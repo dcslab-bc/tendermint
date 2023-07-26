@@ -40,6 +40,9 @@ type Client interface {
 	OfferSnapshotAsync(types.RequestOfferSnapshot) *ReqRes
 	LoadSnapshotChunkAsync(types.RequestLoadSnapshotChunk) *ReqRes
 	ApplySnapshotChunkAsync(types.RequestApplySnapshotChunk) *ReqRes
+	// 230724_HJSONG_EXP_START
+	BeginRecheckTxAsync(types.RequestBeginRecheckTx) *ReqRes
+	EndRecheckTxAsync(types.RequestEndRecheckTx) *ReqRes // EXP_END
 
 	FlushSync() error
 	EchoSync(msg string) (*types.ResponseEcho, error)
@@ -56,6 +59,9 @@ type Client interface {
 	OfferSnapshotSync(types.RequestOfferSnapshot) (*types.ResponseOfferSnapshot, error)
 	LoadSnapshotChunkSync(types.RequestLoadSnapshotChunk) (*types.ResponseLoadSnapshotChunk, error)
 	ApplySnapshotChunkSync(types.RequestApplySnapshotChunk) (*types.ResponseApplySnapshotChunk, error)
+	// 230724_HJSONG_EXP_START
+	BeginRecheckTxSync(types.RequestBeginRecheckTx) (*types.ResponseBeginRecheckTx, error)
+	EndRecheckTxSync(types.RequestEndRecheckTx) (*types.ResponseEndRecheckTx, error) // EXP_END
 }
 
 //----------------------------------------

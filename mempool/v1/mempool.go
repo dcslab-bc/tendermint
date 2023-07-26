@@ -378,19 +378,20 @@ func (txmp *TxMempool) ReapMaxTxs(max int) types.Txs {
 // The caller must hold an exclusive mempool lock (by calling txmp.Lock) before
 // calling Update.
 func (txmp *TxMempool) Update(
-	blockHeight int64,
-	blockTxs types.Txs,
+	// blockHeight int64,
+	// blockTxs types.Txs,
+	block *types.Block,
 	deliverTxResponses []*abci.ResponseDeliverTx,
 	newPreFn mempool.PreCheckFunc,
 	newPostFn mempool.PostCheckFunc,
 ) error {
 	// Safety check: Transactions and responses must match in number.
-	if len(blockTxs) != len(deliverTxResponses) {
+	if len(block.Txs) != len(deliverTxResponses) {
 		panic(fmt.Sprintf("mempool: got %d transactions but %d DeliverTx responses",
-			len(blockTxs), len(deliverTxResponses)))
+			len(block.Txs), len(deliverTxResponses)))
 	}
 
-	txmp.height = blockHeight
+	txmp.height = block.Height
 	txmp.notifiedTxsAvailable = false
 
 	if newPreFn != nil {
@@ -400,7 +401,7 @@ func (txmp *TxMempool) Update(
 		txmp.postCheck = newPostFn
 	}
 
-	for i, tx := range blockTxs {
+	for i, tx := range block.Txs {
 		// Add successful committed transactions to the cache (if they are not
 		// already present).  Transactions that failed to commit are removed from
 		// the cache unless the operator has explicitly requested we keep them.
@@ -414,7 +415,7 @@ func (txmp *TxMempool) Update(
 		_ = txmp.removeTxByKey(tx.Key())
 	}
 
-	txmp.purgeExpiredTxs(blockHeight)
+	txmp.purgeExpiredTxs(block.Height)
 
 	// If there any uncommitted transactions left in the mempool, we either
 	// initiate re-CheckTx per remaining transaction or notify that remaining

@@ -29,6 +29,9 @@ type AppConnMempool interface {
 	CheckTxAsync(types.RequestCheckTx) *abcicli.ReqRes
 	CheckTxSync(types.RequestCheckTx) (*types.ResponseCheckTx, error)
 
+	BeginRecheckTxSync(types.RequestBeginRecheckTx) (*types.ResponseBeginRecheckTx, error)
+	EndRecheckTxSync(types.RequestEndRecheckTx) (*types.ResponseEndRecheckTx, error)
+
 	FlushAsync() *abcicli.ReqRes
 	FlushSync() error
 }
@@ -128,6 +131,14 @@ func (app *appConnMempool) CheckTxAsync(req types.RequestCheckTx) *abcicli.ReqRe
 
 func (app *appConnMempool) CheckTxSync(req types.RequestCheckTx) (*types.ResponseCheckTx, error) {
 	return app.appConn.CheckTxSync(req)
+}
+
+func (app *appConnMempool) BeginRecheckTxSync(req types.RequestBeginRecheckTx) (*types.ResponseBeginRecheckTx, error) {
+	return app.appConn.BeginRecheckTxSync(req)
+}
+
+func (app *appConnMempool) EndRecheckTxSync(req types.RequestEndRecheckTx) (*types.ResponseEndRecheckTx, error) {
+	return app.appConn.EndRecheckTxSync(req)
 }
 
 //------------------------------------------------

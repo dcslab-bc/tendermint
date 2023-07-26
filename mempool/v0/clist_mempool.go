@@ -577,14 +577,16 @@ func (mem *CListMempool) ReapMaxTxs(max int) types.Txs {
 
 // Lock() must be help by the caller during execution.
 func (mem *CListMempool) Update(
-	height int64,
-	txs types.Txs,
+	// height int64,
+	// txs types.Txs,
+	block *types.Block,
 	deliverTxResponses []*abci.ResponseDeliverTx,
 	preCheck mempool.PreCheckFunc,
 	postCheck mempool.PostCheckFunc,
 ) error {
 	// Set height
-	mem.height = height
+	// mem.height = height
+	mem.height = block.Height
 	mem.notifiedTxsAvailable = false
 
 	if preCheck != nil {
@@ -594,7 +596,8 @@ func (mem *CListMempool) Update(
 		mem.postCheck = postCheck
 	}
 
-	for i, tx := range txs {
+	// for i, tx := range txs {
+	for i, tx := range block.Txs {
 		if deliverTxResponses[i].Code == abci.CodeTypeOK {
 			// Add valid committed tx to the cache (if missing).
 			_ = mem.cache.Push(tx)
@@ -622,8 +625,14 @@ func (mem *CListMempool) Update(
 	// or just notify there're some txs left.
 	if mem.Size() > 0 {
 		if mem.config.Recheck {
-			mem.logger.Debug("recheck txs", "numtxs", mem.Size(), "height", height)
+			// mem.logger.Debug("recheck txs", "numtxs", mem.Size(), "height", height)
+			// mem.recheckTxs()
+			mem.logger.Info("Recheck txs", "numtxs", mem.Size(), "height", block.Height)
+			mem.proxyAppConn.BeginRecheckTxSync(abci.RequestBeginRecheckTx{
+				Header: types.TM2PB.Header(&block.Header),
+			})
 			mem.recheckTxs()
+			mem.proxyAppConn.EndRecheckTxSync(abci.RequestEndRecheckTx{Height: block.Height})
 			// At this point, mem.txs are being rechecked.
 			// mem.recheckCursor re-scans mem.txs and possibly removes some txs.
 			// Before mem.Reap(), we should wait for mem.recheckCursor to be nil.

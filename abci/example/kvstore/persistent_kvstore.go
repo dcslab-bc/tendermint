@@ -84,6 +84,15 @@ func (app *PersistentKVStoreApplication) CheckTx(req types.RequestCheckTx) types
 	return app.app.CheckTx(req)
 }
 
+// 230724_HJSONG_EXP_START
+func (app *PersistentKVStoreApplication) BeginRecheckTx(req types.RequestBeginRecheckTx) types.ResponseBeginRecheckTx {
+	return app.app.BeginRecheckTx(req)
+}
+
+func (app *PersistentKVStoreApplication) EndRecheckTx(req types.RequestEndRecheckTx) types.ResponseEndRecheckTx {
+	return app.app.EndRecheckTx(req)
+} // EXP_END
+
 // Commit will panic if InitChain was not called
 func (app *PersistentKVStoreApplication) Commit() types.ResponseCommit {
 	return app.app.Commit()
