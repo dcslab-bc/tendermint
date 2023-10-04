@@ -1,3 +1,3 @@
-killall tendermint
+killall podc
 killall abci-cli
-rm -rf ~/.tendermint_app
+rm -rf ~/.podc_app

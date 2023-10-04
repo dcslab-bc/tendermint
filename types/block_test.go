@@ -5,6 +5,7 @@ import (
 	// number generator here and we can run the tests a bit faster
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"math"
 	"os"
 	"reflect"
@@ -15,16 +16,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/crypto/merkle"
-	"github.com/tendermint/tendermint/crypto/tmhash"
-	"github.com/tendermint/tendermint/libs/bits"
-	"github.com/tendermint/tendermint/libs/bytes"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	tmversion "github.com/tendermint/tendermint/proto/tendermint/version"
-	tmtime "github.com/tendermint/tendermint/types/time"
-	"github.com/tendermint/tendermint/version"
+	"github.com/reapchain/reapchain-core/crypto"
+	"github.com/reapchain/reapchain-core/crypto/merkle"
+	"github.com/reapchain/reapchain-core/crypto/tmhash"
+	"github.com/reapchain/reapchain-core/libs/bits"
+	"github.com/reapchain/reapchain-core/libs/bytes"
+	tmrand "github.com/reapchain/reapchain-core/libs/rand"
+	tmproto "github.com/reapchain/reapchain-core/proto/podc/types"
+	tmversion "github.com/reapchain/reapchain-core/proto/podc/version"
+	tmtime "github.com/reapchain/reapchain-core/types/time"
+	"github.com/reapchain/reapchain-core/version"
 )
 
 func TestMain(m *testing.M) {
@@ -149,9 +150,20 @@ func TestBlockHashesTo(t *testing.T) {
 
 	block := MakeBlock(h, []Tx{Tx("Hello World")}, commit, evList)
 	block.ValidatorsHash = valSet.Hash()
+
+	block.ConsensusRound = NewConsensusRound(1, 4, 4, 4)
+	block.StandingMembersHash = NewStandingMemberSet(nil).Hash()
+	block.SteeringMemberCandidatesHash = NewSteeringMemberCandidateSet(nil).Hash()
+	block.QrnsHash = NewQrnSet(1, nil, nil).Hash()
+	block.VrfsHash = NewVrfSet(1, nil, nil).Hash()
+
 	assert.False(t, block.HashesTo([]byte{}))
 	assert.False(t, block.HashesTo([]byte("something else")))
-	assert.True(t, block.HashesTo(block.Hash()))
+
+	fmt.Println("hihi")
+	blockHash := block.Hash()
+	fmt.Println("hihi", blockHash)
+	assert.True(t, block.HashesTo(blockHash))
 }
 
 func TestBlockSize(t *testing.T) {
@@ -200,7 +212,7 @@ func makeBlockID(hash []byte, partSetSize uint32, partSetHash []byte) BlockID {
 
 var nilBytes []byte
 
-// This follows RFC-6962, i.e. `echo -n '' | sha256sum`
+// This follows RFC-6962, i.e. `echo -n ” | sha256sum`
 var emptyBytes = []byte{0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8,
 	0x99, 0x6f, 0xb9, 0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b,
 	0x78, 0x52, 0xb8, 0x55}
@@ -309,37 +321,48 @@ func TestHeaderHash(t *testing.T) {
 		expectHash bytes.HexBytes
 	}{
 		{"Generates expected hash", &Header{
-			Version:            tmversion.Consensus{Block: 1, App: 2},
-			ChainID:            "chainId",
-			Height:             3,
-			Time:               time.Date(2019, 10, 13, 16, 14, 44, 0, time.UTC),
-			LastBlockID:        makeBlockID(make([]byte, tmhash.Size), 6, make([]byte, tmhash.Size)),
-			LastCommitHash:     tmhash.Sum([]byte("last_commit_hash")),
-			DataHash:           tmhash.Sum([]byte("data_hash")),
-			ValidatorsHash:     tmhash.Sum([]byte("validators_hash")),
-			NextValidatorsHash: tmhash.Sum([]byte("next_validators_hash")),
-			ConsensusHash:      tmhash.Sum([]byte("consensus_hash")),
-			AppHash:            tmhash.Sum([]byte("app_hash")),
-			LastResultsHash:    tmhash.Sum([]byte("last_results_hash")),
-			EvidenceHash:       tmhash.Sum([]byte("evidence_hash")),
-			ProposerAddress:    crypto.AddressHash([]byte("proposer_address")),
-		}, hexBytesFromString("F740121F553B5418C3EFBD343C2DBFE9E007BB67B0D020A0741374BAB65242A4")},
+			Version:     tmversion.Consensus{Block: 1, App: 2},
+			ChainID:     "chainId",
+			Height:      3,
+			Time:        time.Date(2019, 10, 13, 16, 14, 44, 0, time.UTC),
+			LastBlockID: makeBlockID(make([]byte, tmhash.Size), 6, make([]byte, tmhash.Size)),
+
+			LastCommitHash:               tmhash.Sum([]byte("last_commit_hash")),
+			DataHash:                     tmhash.Sum([]byte("data_hash")),
+			ValidatorsHash:               tmhash.Sum([]byte("validators_hash")),
+			NextValidatorsHash:           tmhash.Sum([]byte("next_validators_hash")),
+			ConsensusHash:                tmhash.Sum([]byte("consensus_hash")),
+			AppHash:                      tmhash.Sum([]byte("app_hash")),
+			LastResultsHash:              tmhash.Sum([]byte("last_results_hash")),
+			EvidenceHash:                 tmhash.Sum([]byte("evidence_hash")),
+			ProposerAddress:              crypto.AddressHash([]byte("proposer_address")),
+			StandingMembersHash:          tmhash.Sum([]byte("standing_member_hash")),
+			QrnsHash:                     tmhash.Sum([]byte("qrns_hash")),
+			VrfsHash:                     tmhash.Sum([]byte("vrfs_hash")),
+			SteeringMemberCandidatesHash: tmhash.Sum([]byte("steering_member_candidates_hash")),
+			ConsensusRound:               NewConsensusRound(1, 4, 4, 4),
+		}, hexBytesFromString("1F5A7BE631E78E4A6CC351B7206E7D321CCB88995B9E8981DD5A00FE07D44C4B")},
 		{"nil header yields nil", nil, nil},
 		{"nil ValidatorsHash yields nil", &Header{
-			Version:            tmversion.Consensus{Block: 1, App: 2},
-			ChainID:            "chainId",
-			Height:             3,
-			Time:               time.Date(2019, 10, 13, 16, 14, 44, 0, time.UTC),
-			LastBlockID:        makeBlockID(make([]byte, tmhash.Size), 6, make([]byte, tmhash.Size)),
-			LastCommitHash:     tmhash.Sum([]byte("last_commit_hash")),
-			DataHash:           tmhash.Sum([]byte("data_hash")),
-			ValidatorsHash:     nil,
-			NextValidatorsHash: tmhash.Sum([]byte("next_validators_hash")),
-			ConsensusHash:      tmhash.Sum([]byte("consensus_hash")),
-			AppHash:            tmhash.Sum([]byte("app_hash")),
-			LastResultsHash:    tmhash.Sum([]byte("last_results_hash")),
-			EvidenceHash:       tmhash.Sum([]byte("evidence_hash")),
-			ProposerAddress:    crypto.AddressHash([]byte("proposer_address")),
+			Version:                      tmversion.Consensus{Block: 1, App: 2},
+			ChainID:                      "chainId",
+			Height:                       3,
+			Time:                         time.Date(2019, 10, 13, 16, 14, 44, 0, time.UTC),
+			LastBlockID:                  makeBlockID(make([]byte, tmhash.Size), 6, make([]byte, tmhash.Size)),
+			LastCommitHash:               tmhash.Sum([]byte("last_commit_hash")),
+			DataHash:                     tmhash.Sum([]byte("data_hash")),
+			ValidatorsHash:               nil,
+			NextValidatorsHash:           tmhash.Sum([]byte("next_validators_hash")),
+			ConsensusHash:                tmhash.Sum([]byte("consensus_hash")),
+			AppHash:                      tmhash.Sum([]byte("app_hash")),
+			LastResultsHash:              tmhash.Sum([]byte("last_results_hash")),
+			EvidenceHash:                 tmhash.Sum([]byte("evidence_hash")),
+			ProposerAddress:              crypto.AddressHash([]byte("proposer_address")),
+			StandingMembersHash:          tmhash.Sum([]byte("standingMember_hash")),
+			SteeringMemberCandidatesHash: tmhash.Sum([]byte("steeringMmeber_hash")),
+			QrnsHash:                     tmhash.Sum([]byte("qrn_hash")),
+			VrfsHash:                     tmhash.Sum([]byte("qrn_hash")),
+			ConsensusRound:               NewConsensusRound(1, 4, 4, 4),
 		}, nil},
 	}
 	for _, tc := range testCases {
@@ -359,8 +382,10 @@ func TestHeaderHash(t *testing.T) {
 					assert.False(t, f.IsZero(), "Found zero-valued field %v",
 						s.Type().Field(i).Name)
 
+					fmt.Println(s.Type().Field(i).Name)
+
 					switch f := f.Interface().(type) {
-					case int64, bytes.HexBytes, string:
+					case int64, bytes.HexBytes, string, ConsensusRound:
 						byteSlices = append(byteSlices, cdcEncode(f))
 					case time.Time:
 						bz, err := gogotypes.StdTimeMarshal(f)
@@ -379,8 +404,7 @@ func TestHeaderHash(t *testing.T) {
 						t.Errorf("unknown type %T", f)
 					}
 				}
-				assert.Equal(t,
-					bytes.HexBytes(merkle.HashFromByteSlices(byteSlices)), tc.header.Hash())
+				assert.Equal(t, bytes.HexBytes(merkle.HashFromByteSlices(byteSlices)), tc.header.Hash())
 			}
 		})
 	}
@@ -401,25 +425,29 @@ func TestMaxHeaderBytes(t *testing.T) {
 	timestamp := time.Date(math.MaxInt64, 0, 0, 0, 0, 0, math.MaxInt64, time.UTC)
 
 	h := Header{
-		Version:            tmversion.Consensus{Block: math.MaxInt64, App: math.MaxInt64},
-		ChainID:            maxChainID,
-		Height:             math.MaxInt64,
-		Time:               timestamp,
-		LastBlockID:        makeBlockID(make([]byte, tmhash.Size), math.MaxInt32, make([]byte, tmhash.Size)),
-		LastCommitHash:     tmhash.Sum([]byte("last_commit_hash")),
-		DataHash:           tmhash.Sum([]byte("data_hash")),
-		ValidatorsHash:     tmhash.Sum([]byte("validators_hash")),
-		NextValidatorsHash: tmhash.Sum([]byte("next_validators_hash")),
-		ConsensusHash:      tmhash.Sum([]byte("consensus_hash")),
-		AppHash:            tmhash.Sum([]byte("app_hash")),
-		LastResultsHash:    tmhash.Sum([]byte("last_results_hash")),
-		EvidenceHash:       tmhash.Sum([]byte("evidence_hash")),
-		ProposerAddress:    crypto.AddressHash([]byte("proposer_address")),
+		Version:                      tmversion.Consensus{Block: math.MaxInt64, App: math.MaxInt64},
+		ChainID:                      maxChainID,
+		Height:                       math.MaxInt64,
+		Time:                         timestamp,
+		LastBlockID:                  makeBlockID(make([]byte, tmhash.Size), math.MaxInt32, make([]byte, tmhash.Size)),
+		LastCommitHash:               tmhash.Sum([]byte("last_commit_hash")),
+		DataHash:                     tmhash.Sum([]byte("data_hash")),
+		ValidatorsHash:               tmhash.Sum([]byte("validators_hash")),
+		NextValidatorsHash:           tmhash.Sum([]byte("next_validators_hash")),
+		ConsensusHash:                tmhash.Sum([]byte("consensus_hash")),
+		AppHash:                      tmhash.Sum([]byte("app_hash")),
+		LastResultsHash:              tmhash.Sum([]byte("last_results_hash")),
+		EvidenceHash:                 tmhash.Sum([]byte("evidence_hash")),
+		ProposerAddress:              crypto.AddressHash([]byte("proposer_address")),
+		StandingMembersHash:          tmhash.Sum([]byte("standingMember_hash")),
+		SteeringMemberCandidatesHash: tmhash.Sum([]byte("steeringMmeber_hash")),
+		QrnsHash:                     tmhash.Sum([]byte("qrn_hash")),
+		VrfsHash:                     tmhash.Sum([]byte("qrn_hash")),
+		ConsensusRound:               NewConsensusRound(1, 4, 4, 4),
 	}
 
 	bz, err := h.ToProto().Marshal()
 	require.NoError(t, err)
-
 	assert.EqualValues(t, MaxHeaderBytes, int64(len(bz)))
 }
 
@@ -453,10 +481,10 @@ func TestBlockMaxDataBytes(t *testing.T) {
 		0: {-10, 1, 0, true, 0},
 		1: {10, 1, 0, true, 0},
 		2: {841, 1, 0, true, 0},
-		3: {842, 1, 0, false, 0},
-		4: {843, 1, 0, false, 1},
-		5: {954, 2, 0, false, 1},
-		6: {1053, 2, 100, false, 0},
+		3: {994, 1, 0, false, 0},
+		4: {995, 1, 0, false, 1},
+		5: {1106, 2, 0, false, 1},
+		6: {1205, 2, 100, false, 0},
 	}
 
 	for i, tc := range testCases {
@@ -484,8 +512,8 @@ func TestBlockMaxDataBytesNoEvidence(t *testing.T) {
 		0: {-10, 1, true, 0},
 		1: {10, 1, true, 0},
 		2: {841, 1, true, 0},
-		3: {842, 1, false, 0},
-		4: {843, 1, false, 1},
+		3: {994, 1, false, 0},
+		4: {995, 1, false, 1},
 	}
 
 	for i, tc := range testCases {

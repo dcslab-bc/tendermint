@@ -1,0 +1,138 @@
+syntax = "proto3";
+package reapchain.state;
+
+option go_package = "github.com/reapchain/reapchain-core/proto/podc/state";
+
+import "gogoproto/gogo.proto";
+import "podc/abci/types.proto";
+import "podc/types/types.proto";
+import "podc/types/validator.proto";
+import "podc/types/params.proto";
+import "podc/version/types.proto";
+import "google/protobuf/timestamp.proto";
+import "podc/types/standing_member.proto";
+import "podc/types/steering_member_candidate.proto";
+import "podc/types/qrn.proto";
+import "podc/types/vrf.proto";
+import "podc/types/setting_steering_member.proto";
+import "podc/types/consensus_round.proto";
+
+// ABCIResponses retains the responses
+// of the various ABCI calls during block processing.
+// It is persisted to disk for each height before calling Commit.
+message ABCIResponses {
+  repeated reapchain.abci.ResponseDeliverTx deliver_txs = 1;
+  reapchain.abci.ResponseEndBlock           end_block   = 2;
+  reapchain.abci.ResponseBeginBlock         begin_block = 3;
+}
+
+// ValidatorsInfo represents the latest validator set, or the last height it changed
+message ValidatorsInfo {
+  podc.types.ValidatorSet validator_set       = 1;
+  int64                         last_height_changed = 2;
+}
+
+message StandingMembersInfo {
+  podc.types.StandingMemberSet standing_member_set       = 1;
+  int64                         last_height_changed = 2;
+  int64 current_coordinator_ranking = 3;
+}
+
+message SteeringMemberCandidateSetInfo {
+  podc.types.SteeringMemberCandidateSet steering_member_candidate_set       = 1;
+  int64                         last_height_changed = 2;
+}
+
+message QrnsInfo {
+  podc.types.QrnSet qrn_set       = 1;
+  int64                         last_height_changed = 2;
+}
+
+message VrfsInfo {
+  podc.types.VrfSet vrf_set       = 1;
+  int64                         last_height_changed = 2;
+}
+
+message SettingSteeringMemberInfo {
+  podc.types.SettingSteeringMember setting_steering_member       = 1;
+  int64                         last_height_changed = 2;
+}
+
+message ConsensusRoundInfo {
+  podc.types.ConsensusRound consensus_round       = 1 [(gogoproto.nullable) = false];
+  int64                          last_height_changed = 2;
+}
+
+
+// ConsensusParamsInfo represents the latest consensus params, or the last height it changed
+message ConsensusParamsInfo {
+  podc.types.ConsensusParams consensus_params    = 1 [(gogoproto.nullable) = false];
+  int64                            last_height_changed = 2;
+}
+
+message Version {
+  reapchain.version.Consensus consensus = 1 [(gogoproto.nullable) = false];
+  string                       software  = 2;
+}
+
+message State {
+  Version version = 1 [(gogoproto.nullable) = false];
+
+  // immutable
+  string chain_id       = 2 [(gogoproto.customname) = "ChainID"];
+  int64  initial_height = 14;
+
+  // LastBlockHeight=0 at genesis (ie. block(H=0) does not exist)
+  int64                    last_block_height = 3;
+  podc.types.BlockID last_block_id     = 4
+      [(gogoproto.nullable) = false, (gogoproto.customname) = "LastBlockID"];
+  google.protobuf.Timestamp last_block_time = 5
+      [(gogoproto.nullable) = false, (gogoproto.stdtime) = true];
+
+  // LastValidators is used to validate block.LastCommit.
+  // Validators are persisted to the database separately every time they change,
+  // so we can query for historical validator sets.
+  // Note that if s.LastBlockHeight causes a valset change,
+  // we set s.LastHeightValidatorsChanged = s.LastBlockHeight + 1 + 1
+  // Extra +1 due to nextValSet delay.
+  podc.types.ValidatorSet next_validators                = 6;
+  podc.types.ValidatorSet validators                     = 7;
+  podc.types.ValidatorSet last_validators                = 8;
+  int64                         last_height_validators_changed = 9;
+
+  // Consensus parameters used for validating blocks.
+  // Changes returned by EndBlock and updated after Commit.
+  podc.types.ConsensusParams consensus_params                     = 10 [(gogoproto.nullable) = false];
+  int64                            last_height_consensus_params_changed = 11;
+
+  // Merkle root of the results from executing prev block
+  bytes last_results_hash = 12;
+
+  // the latest AppHash we've received from calling abci.Commit()
+  bytes app_hash = 13;
+
+  podc.types.StandingMemberSet standing_member_set          = 15;
+  podc.types.ConsensusRound consensus_round                     = 16 [(gogoproto.nullable) = false];
+
+  podc.types.QrnSet qrn_set          = 17;
+  podc.types.QrnSet next_qrn_set          = 23;
+
+  int64                         last_height_standing_members_changed = 18;
+  int64                         last_height_consensus_round_changed = 19;
+
+  podc.types.SteeringMemberCandidateSet steering_member_candidate_set          = 20;
+  int64                         last_height_steering_member_candidates_changed = 21;
+  
+  podc.types.VrfSet vrf_set          = 22;
+  podc.types.VrfSet next_vrf_set          = 24;
+
+  podc.types.SettingSteeringMember setting_steering_member          = 25;
+  bool is_set_steering_member          = 26;
+
+  int64                         last_height_qrn_changed = 27;
+  int64                         last_height_next_qrn_changed = 28;
+  int64                         last_height_vrf_changed = 29;
+  int64                         last_height_next_vrf_changed = 30;
+  int64                         last_height_setting_steering_member_changed = 31;
+
+}

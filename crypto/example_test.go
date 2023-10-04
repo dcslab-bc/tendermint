@@ -1,4 +1,4 @@
-// Copyright 2017 Tendermint. All Rights Reserved.
+// Copyright 2017 ReapchainCore. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ package crypto_test
 import (
 	"fmt"
 
-	"github.com/tendermint/tendermint/crypto"
+	"github.com/reapchain/reapchain-core/crypto"
 )
 
 func ExampleSha256() {

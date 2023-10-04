@@ -6,8 +6,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/p2p"
-	p2pmocks "github.com/tendermint/tendermint/p2p/mocks"
+	"github.com/reapchain/reapchain-core/p2p"
+	p2pmocks "github.com/reapchain/reapchain-core/p2p/mocks"
 )
 
 func TestSnapshot_Key(t *testing.T) {
@@ -39,6 +39,9 @@ func TestSnapshot_Key(t *testing.T) {
 }
 
 func TestSnapshotPool_Add(t *testing.T) {
+	stateProvider := &mocks.StateProvider{}
+	stateProvider.On("AppHash", mock.Anything, uint64(1)).Return([]byte("app_hash"), nil)
+
 	peer := &p2pmocks.Peer{}
 	peer.On("ID").Return(p2p.ID("id"))
 
@@ -68,6 +71,10 @@ func TestSnapshotPool_Add(t *testing.T) {
 	// The pool should have populated the snapshot with the trusted app hash
 	snapshot := pool.Best()
 	require.NotNil(t, snapshot)
+
+	assert.Equal(t, []byte("app_hash"), snapshot.trustedAppHash)
+
+	stateProvider.AssertExpectations(t)
 }
 
 func TestSnapshotPool_GetPeer(t *testing.T) {

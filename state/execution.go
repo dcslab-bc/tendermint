@@ -3,23 +3,27 @@ package state
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
-	abci "github.com/tendermint/tendermint/abci/types"
-	cryptoenc "github.com/tendermint/tendermint/crypto/encoding"
-	"github.com/tendermint/tendermint/libs/fail"
-	"github.com/tendermint/tendermint/libs/log"
-	mempl "github.com/tendermint/tendermint/mempool"
-	tmstate "github.com/tendermint/tendermint/proto/tendermint/state"
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	"github.com/tendermint/tendermint/proxy"
-	"github.com/tendermint/tendermint/types"
+	abci "github.com/reapchain/reapchain-core/abci/types"
+	cryptoenc "github.com/reapchain/reapchain-core/crypto/encoding"
+	"github.com/reapchain/reapchain-core/libs/fail"
+	"github.com/reapchain/reapchain-core/libs/log"
+	mempl "github.com/reapchain/reapchain-core/mempool"
+	tmstate "github.com/reapchain/reapchain-core/proto/podc/state"
+	tmproto "github.com/reapchain/reapchain-core/proto/podc/types"
+	"github.com/reapchain/reapchain-core/proxy"
+	"github.com/reapchain/reapchain-core/types"
 )
 
 //-----------------------------------------------------------------------------
 // BlockExecutor handles block execution and state updates.
 // It exposes ApplyBlock(), which validates & executes the block, updates state w/ ABCI responses,
 // then commits and updates the mempool atomically, then saves state.
+
+const MAXIMUM_STEERING_MEMBER_CANDIDATES = 30
+const MAXIMUM_STEERING_MEMBERS = 15
 
 // BlockExecutor provides the context and accessories for properly executing a block.
 type BlockExecutor struct {
@@ -131,14 +135,14 @@ func (blockExec *BlockExecutor) ValidateBlock(state State, block *types.Block) e
 func (blockExec *BlockExecutor) ApplyBlock(
 	state State, blockID types.BlockID, block *types.Block,
 ) (State, int64, error) {
-
 	if err := validateBlock(state, block); err != nil {
 		return state, 0, ErrInvalidBlock(err)
 	}
 
 	startTime := time.Now().UnixNano()
 	abciResponses, err := execBlockOnProxyApp(
-		blockExec.logger, blockExec.proxyApp, block, blockExec.store, state.InitialHeight,
+		//@@@logging: executed block
+		blockExec.logger, blockExec.proxyApp, block, blockExec.store, state.InitialHeight, state.VrfSet,
 	)
 	endTime := time.Now().UnixNano()
 	blockExec.metrics.BlockProcessingTime.Observe(float64(endTime-startTime) / 1000000)
@@ -149,33 +153,47 @@ func (blockExec *BlockExecutor) ApplyBlock(
 	fail.Fail() // XXX
 
 	// Save the results before we commit.
+	// abciResponses.EndBlock.QrnUpdates
 	if err := blockExec.store.SaveABCIResponses(block.Height, abciResponses); err != nil {
 		return state, 0, err
 	}
 
 	fail.Fail() // XXX
 
-	// validate the validator updates and convert to tendermint types
+	// validate the validator updates and convert to reapchain-core types
 	abciValUpdates := abciResponses.EndBlock.ValidatorUpdates
-	err = validateValidatorUpdates(abciValUpdates, state.ConsensusParams.Validator)
-	if err != nil {
-		return state, 0, fmt.Errorf("error in validator updates: %v", err)
-	}
 
-	validatorUpdates, err := types.PB2TM.ValidatorUpdates(abciValUpdates)
+	err = validateStandingMemberUpdates(abciValUpdates, state.ConsensusParams.Validator)
+	if err != nil {
+		return state, 0, fmt.Errorf("error in standing member updates: %v", err)
+	}
+	standingMemberUpdates, err := types.PB2TM.StandingMemberUpdates(abciValUpdates)
 	if err != nil {
 		return state, 0, err
 	}
-	if len(validatorUpdates) > 0 {
-		blockExec.logger.Debug("updates to validators", "updates", types.ValidatorListString(validatorUpdates))
+	if len(standingMemberUpdates) > 0 {
+		blockExec.logger.Debug("updates to standing members", "updates", types.StandingMemberListString(standingMemberUpdates))
+	}
+
+	err = validateSteeringMemberCandidateUpdates(abciValUpdates, state.ConsensusParams.Validator)
+	if err != nil {
+		return state, 0, fmt.Errorf("error in steering member candidate updates: %v", err)
+	}
+	steeringMemberCandidateUpdates, err := types.PB2TM.SteeringMemberCandidateUpdates(abciValUpdates)
+	if err != nil {
+		return state, 0, err
+	}
+	if len(steeringMemberCandidateUpdates) > 0 {
+		blockExec.logger.Debug("updates to steering member candidates", "updates", types.SteeringMemberCandidateListString(steeringMemberCandidateUpdates))
 	}
 
 	// Update the state with the block and responses.
-	state, err = updateState(state, blockID, &block.Header, abciResponses, validatorUpdates)
+	state, err = updateState(blockExec.store, state, blockID, &block.Header, abciResponses, standingMemberUpdates, steeringMemberCandidateUpdates)
 	if err != nil {
 		return state, 0, fmt.Errorf("commit failed for application: %v", err)
 	}
 
+	//@@@logging: committed state
 	// Lock mempool, commit app state, update mempoool.
 	appHash, retainHeight, err := blockExec.Commit(state, block, abciResponses.DeliverTxs)
 	if err != nil {
@@ -189,15 +207,21 @@ func (blockExec *BlockExecutor) ApplyBlock(
 
 	// Update the app hash and save the state.
 	state.AppHash = appHash
+
 	if err := blockExec.store.Save(state); err != nil {
 		return state, 0, err
 	}
-
 	fail.Fail() // XXX
 
 	// Events are fired after everything else.
 	// NOTE: if we crash between Commit and Save, events wont be fired during replay
-	fireEvents(blockExec.logger, blockExec.eventBus, block, abciResponses, validatorUpdates)
+	fireEvents(blockExec.logger, blockExec.eventBus, block, abciResponses, standingMemberUpdates, steeringMemberCandidateUpdates, state.ConsensusRound, 
+	state.VrfSet, 
+	state.NextVrfSet, 
+	state.QrnSet, 
+	state.NextQrnSet, 
+	state.SettingSteeringMember)
+
 
 	return state, retainHeight, nil
 }
@@ -226,6 +250,7 @@ func (blockExec *BlockExecutor) Commit(
 
 	// Commit block, get hash back
 	res, err := blockExec.proxyApp.CommitSync()
+	
 	if err != nil {
 		blockExec.logger.Error("client error during proxyAppConn.CommitSync", "err", err)
 		return nil, 0, err
@@ -262,12 +287,14 @@ func execBlockOnProxyApp(
 	block *types.Block,
 	store Store,
 	initialHeight int64,
+	vrfSet *types.VrfSet,
 ) (*tmstate.ABCIResponses, error) {
 	var validTxs, invalidTxs = 0, 0
 
 	txIndex := 0
 	abciResponses := new(tmstate.ABCIResponses)
 	dtxs := make([]*abci.ResponseDeliverTx, len(block.Txs))
+
 	abciResponses.DeliverTxs = dtxs
 
 	// Execute transactions and get hash.
@@ -304,11 +331,14 @@ func execBlockOnProxyApp(
 		return nil, errors.New("nil header")
 	}
 
+	vrfCheckList := types.GetVrfCheckList(vrfSet)
+
 	abciResponses.BeginBlock, err = proxyAppConn.BeginBlockSync(abci.RequestBeginBlock{
 		Hash:                block.Hash(),
 		Header:              *pbh,
 		LastCommitInfo:      commitInfo,
 		ByzantineValidators: byzVals,
+		VrfCheckList: vrfCheckList, 
 	})
 	if err != nil {
 		logger.Error("error in proxyAppConn.BeginBlock", "err", err)
@@ -325,11 +355,11 @@ func execBlockOnProxyApp(
 
 	// End block.
 	abciResponses.EndBlock, err = proxyAppConn.EndBlockSync(abci.RequestEndBlock{Height: block.Height})
+
 	if err != nil {
 		logger.Error("error in proxyAppConn.EndBlock", "err", err)
 		return nil, err
 	}
-
 	logger.Info("executed block", "height", block.Height, "num_valid_txs", validTxs, "num_invalid_txs", invalidTxs)
 	return abciResponses, nil
 }
@@ -399,32 +429,129 @@ func validateValidatorUpdates(abciUpdates []abci.ValidatorUpdate,
 	return nil
 }
 
+func validateStandingMemberUpdates(standingMemberUpdatesAbci abci.ValidatorUpdates, params tmproto.ValidatorParams) error {
+	for _, valUpdate := range standingMemberUpdatesAbci {
+		if valUpdate.GetType() == "standing" {
+			// Check if validator's pubkey matches an ABCI type in the consensus params
+			pk, err := cryptoenc.PubKeyFromProto(valUpdate.GetPubKey())
+			if err != nil {
+				return err
+			}
+
+			if !types.IsValidPubkeyType(params, pk.Type()) {
+				return fmt.Errorf("validator %v is using pubkey %s, which is unsupported for consensus",
+					valUpdate, pk.Type())
+			}
+		}
+	}
+	return nil
+}
+
+func validateSteeringMemberCandidateUpdates(validatorUpdatesAbci abci.ValidatorUpdates, params tmproto.ValidatorParams) error {
+	for _, valUpdate := range validatorUpdatesAbci {
+		if valUpdate.GetType() == "steering" {
+			pk, err := cryptoenc.PubKeyFromProto(valUpdate.GetPubKey())
+			if err != nil {
+				return err
+			}
+
+			if !types.IsValidPubkeyType(params, pk.Type()) {
+				return fmt.Errorf("validator %v is using pubkey %s, which is unsupported for consensus",
+					valUpdate, pk.Type())
+			}
+		}
+	}
+	return nil
+}
+
+func validateQrnUpdates(qrnUpdatesAbci []abci.QrnUpdate, params tmproto.ValidatorParams) error {
+	for _, qrnUpdate := range qrnUpdatesAbci {
+		pk, err := cryptoenc.PubKeyFromProto(qrnUpdate.StandingMemberPubKey)
+		if err != nil {
+			return err
+		}
+
+		if !types.IsValidPubkeyType(params, pk.Type()) {
+			return fmt.Errorf("validator %v is using pubkey %s, which is unsupported for consensus",
+				qrnUpdate, pk.Type())
+		}
+	}
+	return nil
+}
+
 // updateState returns a new State updated according to the header and responses.
 func updateState(
+	store Store,
 	state State,
 	blockID types.BlockID,
 	header *types.Header,
 	abciResponses *tmstate.ABCIResponses,
-	validatorUpdates []*types.Validator,
+	standingMemberUpdates []*types.StandingMember,
+	steeringMemberCandidateUpdates []*types.SteeringMemberCandidate,
 ) (State, error) {
-
-	// Copy the valset so we can apply changes from EndBlock
-	// and update s.LastValidators and s.Validators.
+	// Copy the valset so we can apply changes from EndBlock and update s.LastValidators and s.Validators.
 	nValSet := state.NextValidators.Copy()
-
 	// Update the validator set with the latest abciResponses.
-	lastHeightValsChanged := state.LastHeightValidatorsChanged
-	if len(validatorUpdates) > 0 {
-		err := nValSet.UpdateWithChangeSet(validatorUpdates)
+	lastHeightValsChanged := state.LastHeightValidatorsChanged 
+
+	// Copy the standing member set so we can apply changes from EndBlock and update s.StandingMemberSet.
+	standingMemberSet := state.StandingMemberSet.Copy()
+	// Update the standing member set with the latest abciResponses.
+	lastHeightStandingMembersChanged := state.LastHeightStandingMembersChanged
+	
+	if len(standingMemberUpdates) > 0 { // add or remove standing members
+		err := standingMemberSet.UpdateWithChangeSet(standingMemberUpdates)
 		if err != nil {
-			return state, fmt.Errorf("error changing validator set: %v", err)
+			return state, fmt.Errorf("error changing standing member set: %v", err)
 		}
-		// Change results from this height but only applies to the next next height.
-		lastHeightValsChanged = header.Height + 1 + 1
+
+		state.NextQrnSet.UpdateWithChangeSet(standingMemberSet)
+		lastHeightStandingMembersChanged = header.Height  + 1
+		state.LastHeightNextQrnChanged = header.Height + 1
 	}
 
-	// Update validator proposer priority and set state variables.
-	nValSet.IncrementProposerPriority(1)
+	// Copy the steering member candidate set so we can apply changes from EndBlock and update s.StandingMemberCandidateSet.
+	steeringMemberCandidateSet := state.SteeringMemberCandidateSet.Copy()
+	// Update the steering member candidate set with the latest abciResponses.
+	lastHeightSteeringMemberCandidatesChanged := state.LastHeightSteeringMemberCandidatesChanged
+
+	if len(steeringMemberCandidateUpdates) > 0 {// add or remove steering member candiates
+		err := steeringMemberCandidateSet.UpdateWithChangeSet(steeringMemberCandidateUpdates)
+		if err != nil {
+			return state, fmt.Errorf("error changing steering member candidate set: %v", err)
+		}
+
+		state.NextVrfSet.UpdateWithChangeSet(steeringMemberCandidateSet)
+		lastHeightSteeringMemberCandidatesChanged = header.Height + 1
+		state.LastHeightNextVrfChanged = header.Height + 1
+	}
+
+	// if it has any update about the stanidng members or steering member candiates,
+	// update the validator set information (because the validator is added or removed)
+	if len(standingMemberUpdates) > 0 || len(steeringMemberCandidateUpdates) > 0 {
+		validators := make([]*types.Validator, 0, len(state.Validators.Validators))
+
+		currentNumberofSteeringMembers := 0
+		for _, validator := range state.Validators.Validators {
+			index, _ := standingMemberSet.GetStandingMemberByAddress(validator.Address)
+			if index != -1 {
+				validators = append(validators, validator.Copy())
+				continue
+			}
+
+			index, _ = steeringMemberCandidateSet.GetSteeringMemberCandidateByAddress(validator.Address)
+			if index != -1 {
+				if currentNumberofSteeringMembers == MAXIMUM_STEERING_MEMBERS {
+					break
+				}
+				validators = append(validators, validator.Copy())
+				currentNumberofSteeringMembers++
+			}
+		}
+		
+		nValSet = types.NewValidatorSet(validators)
+		lastHeightValsChanged = header.Height + 1 + 1
+	}
 
 	// Update the params with the latest abciResponses.
 	nextParams := state.ConsensusParams
@@ -443,42 +570,200 @@ func updateState(
 		lastHeightParamsChanged = header.Height + 1
 	}
 
+	// Update the consensus round with the latest abciResponses.
+	currentConsensusRound := state.ConsensusRound
+	lastHeightConsensusRoundChanged := state.LastHeightConsensusRoundChanged
+	if abciResponses.EndBlock.ConsensusRoundUpdates != nil {
+		currentConsensusRound = types.UpdateConsensusRound(state.ConsensusRound, abciResponses.EndBlock.ConsensusRoundUpdates)
+		err := types.ValidateConsensusRound(currentConsensusRound, header.Height)
+		if err != nil {
+			return state, fmt.Errorf("error updating consensus round: %v", err)
+		}
+		// Change results from this height but only applies to the next height.
+		lastHeightParamsChanged = header.Height + 1
+	}
+
+	lastHeightQrnChanged := state.LastHeightQrnChanged
+	lastHeightVrfChanged := state.LastHeightVrfChanged
+
+	lastHeightNextQrnChanged := state.LastHeightNextQrnChanged
+	lastHeightNextVrfChanged := state.LastHeightNextVrfChanged
+
+	lastHeightSettingSteeringMemberChanged := state.LastHeightSettingSteeringMemberChanged
+	
+	// Change conensus round
+	if currentConsensusRound.ConsensusStartBlockHeight + int64(currentConsensusRound.Period) - 1 == header.Height {
+		currentConsensusRound.ConsensusStartBlockHeight = header.Height + 1
+		nextConsensusStartBlockHeight := currentConsensusRound.ConsensusStartBlockHeight + int64(currentConsensusRound.Period)
+		
+		// reset NextQrns
+		state.QrnSet = state.NextQrnSet.Copy()
+		sort.Sort(types.SortedQrns(state.QrnSet.Qrns))
+		state.NextQrnSet = types.NewQrnSet(nextConsensusStartBlockHeight, standingMemberSet.Copy(), nil)
+		
+		// reset NextVrfs
+		state.VrfSet = state.NextVrfSet.Copy()
+		sort.Sort(types.SortedVrfs(state.VrfSet.Vrfs))
+		state.NextVrfSet = types.NewVrfSet(nextConsensusStartBlockHeight, steeringMemberCandidateSet.Copy(), nil)	
+
+		// reset Consensus round info
+		state.IsSetSteeringMember = false
+		state.SettingSteeringMember = nil
+
+		lastHeightQrnChanged = header.Height + 1
+		lastHeightVrfChanged = header.Height + 1
+		lastHeightNextQrnChanged = header.Height + 1
+		lastHeightNextVrfChanged = header.Height + 1
+		lastHeightConsensusRoundChanged = header.Height + 1
+	}
+
+	// if the currentConsensusRound's consensus start block height is current block height -2,
+	// it setting next Validator (for next consensus round)
+	if currentConsensusRound.ConsensusStartBlockHeight + int64(currentConsensusRound.Period) - 2 == header.Height {
+		validatorSize := len(standingMemberSet.StandingMembers)
+
+		if state.SettingSteeringMember != nil {
+			validatorSize = validatorSize + len(state.SettingSteeringMember.SteeringMemberAddresses)
+		}
+
+		validators := make([]*types.Validator, 0, validatorSize)
+
+		for _, standingMember := range standingMemberSet.StandingMembers {
+			validators = append(validators, types.NewValidator(standingMember.PubKey, standingMember.VotingPower, "standing"))
+		}
+
+		if state.SettingSteeringMember != nil {
+			currentNumberofSteeringMembers := 0
+			for _, steeringMemberAddress := range state.SettingSteeringMember.SteeringMemberAddresses {
+
+				index, currentSteeringMemberCandidate := steeringMemberCandidateSet.GetSteeringMemberCandidateByAddress(steeringMemberAddress)
+				if index != -1 {
+					validators = append(validators, types.NewValidator(currentSteeringMemberCandidate.PubKey, currentSteeringMemberCandidate.VotingPower, "steering"))
+					currentNumberofSteeringMembers++
+				}
+
+				if currentNumberofSteeringMembers == MAXIMUM_STEERING_MEMBERS {
+					break
+				}
+			}
+		}
+		
+		nValSet = types.NewValidatorSet(validators)
+
+		// Change results from this height but only applies to the next next height.
+		lastHeightValsChanged = header.Height + 1 + 1
+		standingMemberSet.CurrentCoordinatorRanking = 0
+	}
+
 	nextVersion := state.Version
+
+	// for store only the qrn period, it check the block height (in the qrn qeriod, it store the qrn information)
+	if (currentConsensusRound.ConsensusStartBlockHeight <= header.Height && header.Height < currentConsensusRound.ConsensusStartBlockHeight + int64(currentConsensusRound.QrnPeriod)) {
+		lastHeightNextQrnChanged = header.Height + 1
+	}
+
+	// for store only the vrf period, it check the block height (in the vrf qeriod, it store the vrf information)
+	if (currentConsensusRound.ConsensusStartBlockHeight + int64(currentConsensusRound.QrnPeriod) <= header.Height && header.Height < currentConsensusRound.ConsensusStartBlockHeight + int64(currentConsensusRound.QrnPeriod) + int64(currentConsensusRound.VrfPeriod)) {
+		lastHeightNextVrfChanged = header.Height + 1
+	}
+
+	// for store only the setting steering member period, it check the block height (in the setting steering member qeriod, it store the setting steering member information)
+	if (currentConsensusRound.ConsensusStartBlockHeight + int64(currentConsensusRound.QrnPeriod) + int64(currentConsensusRound.VrfPeriod) <= header.Height && header.Height < currentConsensusRound.ConsensusStartBlockHeight + int64(currentConsensusRound.Period)) {
+		lastHeightSettingSteeringMemberChanged = header.Height + 1
+	}
+
+	// update coordinator with qrns
+	standingMemberSet.SetCoordinator(state.QrnSet)
+	_, proposer := nValSet.GetByAddress(standingMemberSet.Coordinator.PubKey.Address())
+	nValSet.Proposer = proposer
+
+	nValSet.UpdateTotalVotingPower()
 
 	// NOTE: the AppHash has not been populated.
 	// It will be filled on state.Save.
 	return State{
-		Version:                          nextVersion,
-		ChainID:                          state.ChainID,
-		InitialHeight:                    state.InitialHeight,
-		LastBlockHeight:                  header.Height,
-		LastBlockID:                      blockID,
-		LastBlockTime:                    header.Time,
-		NextValidators:                   nValSet,
-		Validators:                       state.NextValidators.Copy(),
-		LastValidators:                   state.Validators.Copy(),
-		LastHeightValidatorsChanged:      lastHeightValsChanged,
+		Version:         nextVersion,
+		ChainID:         state.ChainID,
+		InitialHeight:   state.InitialHeight,
+		LastBlockHeight: header.Height,
+		LastBlockID:     blockID,
+		LastBlockTime:   header.Time,
+
+		NextValidators:              nValSet,
+		Validators:                  state.NextValidators.Copy(),
+		LastValidators:              state.Validators.Copy(),
+		LastHeightValidatorsChanged: lastHeightValsChanged,
+
 		ConsensusParams:                  nextParams,
 		LastHeightConsensusParamsChanged: lastHeightParamsChanged,
 		LastResultsHash:                  ABCIResponsesResultsHash(abciResponses),
 		AppHash:                          nil,
+
+		StandingMemberSet:                standingMemberSet.Copy(),
+		LastHeightStandingMembersChanged: lastHeightStandingMembersChanged,
+
+		SteeringMemberCandidateSet:                steeringMemberCandidateSet.Copy(),
+		LastHeightSteeringMemberCandidatesChanged: lastHeightSteeringMemberCandidatesChanged,
+
+		ConsensusRound:                  currentConsensusRound,
+		LastHeightConsensusRoundChanged: lastHeightConsensusRoundChanged,
+
+		QrnSet:     state.QrnSet,
+		LastHeightQrnChanged: lastHeightQrnChanged,
+
+		NextQrnSet: state.NextQrnSet,
+		LastHeightNextQrnChanged: lastHeightNextQrnChanged,
+ 
+		VrfSet:     state.VrfSet,
+		LastHeightVrfChanged: lastHeightVrfChanged,
+		
+		NextVrfSet: state.NextVrfSet,
+		LastHeightNextVrfChanged: lastHeightNextVrfChanged,
+
+		SettingSteeringMember: state.SettingSteeringMember,
+		LastHeightSettingSteeringMemberChanged: lastHeightSettingSteeringMemberChanged,
+
+		IsSetSteeringMember:   state.IsSetSteeringMember,
 	}, nil
 }
 
 // Fire NewBlock, NewBlockHeader.
 // Fire TxEvent for every tx.
-// NOTE: if Tendermint crashes before commit, some or all of these events may be published again.
+// NOTE: if ReapchainCore crashes before commit, some or all of these events may be published again.
 func fireEvents(
 	logger log.Logger,
 	eventBus types.BlockEventPublisher,
 	block *types.Block,
 	abciResponses *tmstate.ABCIResponses,
-	validatorUpdates []*types.Validator,
+	standingMemberUpdates []*types.StandingMember,
+	steeringMemberCandidateUpdates []*types.SteeringMemberCandidate,
+	consensusRoundProto tmproto.ConsensusRound,
+	vrfSet *types.VrfSet,
+	nextVrfSet *types.VrfSet,
+	qrnSet *types.QrnSet,
+	nextQrnSet *types.QrnSet,
+	settingSteeringMember *types.SettingSteeringMember,
 ) {
+	vrfSetProto, _ := vrfSet.ToProto();
+	nextVrfSetProto, _ := nextVrfSet.ToProto();
+	qrnSetProto, _ := qrnSet.ToProto();
+	nextQrnSetProto, _ := nextQrnSet.ToProto();
+	settingSteeringMemberProto := settingSteeringMember.ToProto();
+
+	consensus_info := &abci.ConsensusInfo{
+		ConsensusRound:        &consensusRoundProto,
+		VrfSet:                vrfSetProto,
+		NextVrfSet:            nextVrfSetProto,
+		QrnSet:                qrnSetProto,
+		NextQrnSet:            nextQrnSetProto,
+		SettingSteeringMember: settingSteeringMemberProto,
+	};
+
 	if err := eventBus.PublishEventNewBlock(types.EventDataNewBlock{
 		Block:            block,
 		ResultBeginBlock: *abciResponses.BeginBlock,
 		ResultEndBlock:   *abciResponses.EndBlock,
+		ConsensusInfo:   	*consensus_info,
 	}); err != nil {
 		logger.Error("failed publishing new block", "err", err)
 	}
@@ -514,9 +799,16 @@ func fireEvents(
 		}
 	}
 
-	if len(validatorUpdates) > 0 {
-		if err := eventBus.PublishEventValidatorSetUpdates(
-			types.EventDataValidatorSetUpdates{ValidatorUpdates: validatorUpdates}); err != nil {
+	if len(steeringMemberCandidateUpdates) > 0 {
+		if err := eventBus.PublishEventSteeringMemberCandidateSetUpdates(
+			types.EventDataSteeringMemberCandidateSetUpdates{SteeringMemberCandidateUpdates: steeringMemberCandidateUpdates}); err != nil {
+			logger.Error("failed publishing event", "err", err)
+		}
+	}
+
+	if len(standingMemberUpdates) > 0 {
+		if err := eventBus.PublishEventStandingMemberSetUpdates(
+			types.EventDataStandingMemberSetUpdates{StandingMemberUpdates: standingMemberUpdates}); err != nil {
 			logger.Error("failed publishing event", "err", err)
 		}
 	}
@@ -533,8 +825,9 @@ func ExecCommitBlock(
 	logger log.Logger,
 	store Store,
 	initialHeight int64,
+	state State,
 ) ([]byte, error) {
-	_, err := execBlockOnProxyApp(logger, appConnConsensus, block, store, initialHeight)
+	_, err := execBlockOnProxyApp(logger, appConnConsensus, block, store, initialHeight, state.VrfSet)
 	if err != nil {
 		logger.Error("failed executing block on proxy app", "height", block.Height, "err", err)
 		return nil, err
@@ -546,7 +839,6 @@ func ExecCommitBlock(
 		logger.Error("client error during proxyAppConn.CommitSync", "err", res)
 		return nil, err
 	}
-
 	// ResponseCommit has no error or log, just data
 	return res.Data, nil
 }

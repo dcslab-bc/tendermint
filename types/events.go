@@ -3,10 +3,10 @@ package types
 import (
 	"fmt"
 
-	abci "github.com/tendermint/tendermint/abci/types"
-	tmjson "github.com/tendermint/tendermint/libs/json"
-	tmpubsub "github.com/tendermint/tendermint/libs/pubsub"
-	tmquery "github.com/tendermint/tendermint/libs/pubsub/query"
+	abci "github.com/reapchain/reapchain-core/abci/types"
+	tmjson "github.com/reapchain/reapchain-core/libs/json"
+	tmpubsub "github.com/reapchain/reapchain-core/libs/pubsub"
+	tmquery "github.com/reapchain/reapchain-core/libs/pubsub/query"
 )
 
 // Reserved event types (alphabetically sorted).
@@ -16,11 +16,13 @@ const (
 	// after a block has been committed.
 	// These are also used by the tx indexer for async indexing.
 	// All of this data can be fetched through the rpc.
-	EventNewBlock            = "NewBlock"
-	EventNewBlockHeader      = "NewBlockHeader"
-	EventNewEvidence         = "NewEvidence"
-	EventTx                  = "Tx"
-	EventValidatorSetUpdates = "ValidatorSetUpdates"
+	EventNewBlock                          = "NewBlock"
+	EventNewBlockHeader                    = "NewBlockHeader"
+	EventNewEvidence                       = "NewEvidence"
+	EventTx                                = "Tx"
+	EventValidatorSetUpdates               = "ValidatorSetUpdates"
+	EventSteeringMemberCandidateSetUpdates = "SteeringMemberCandidateSetUpdates"
+	EventStandingMemberSetUpdates          = "StandingMemberSetUpdates"
 
 	// Internal consensus events.
 	// These are used for testing the consensus state machine.
@@ -36,6 +38,10 @@ const (
 	EventUnlock           = "Unlock"
 	EventValidBlock       = "ValidBlock"
 	EventVote             = "Vote"
+
+	EventQrn                   = "Qrn"
+	EventVrf                   = "Vrf"
+	EventSettingSteeringMember = "SettingSteeringMember"
 )
 
 // ENCODING / DECODING
@@ -46,6 +52,7 @@ type TMEventData interface {
 }
 
 func init() {
+	//RegisterType [reapchain-core => tendermint]
 	tmjson.RegisterType(EventDataNewBlock{}, "tendermint/event/NewBlock")
 	tmjson.RegisterType(EventDataNewBlockHeader{}, "tendermint/event/NewBlockHeader")
 	tmjson.RegisterType(EventDataNewEvidence{}, "tendermint/event/NewEvidence")
@@ -54,8 +61,14 @@ func init() {
 	tmjson.RegisterType(EventDataNewRound{}, "tendermint/event/NewRound")
 	tmjson.RegisterType(EventDataCompleteProposal{}, "tendermint/event/CompleteProposal")
 	tmjson.RegisterType(EventDataVote{}, "tendermint/event/Vote")
-	tmjson.RegisterType(EventDataValidatorSetUpdates{}, "tendermint/event/ValidatorSetUpdates")
+	tmjson.RegisterType(EventDataSteeringMemberCandidateSetUpdates{}, "tendermint/event/SteeringMemberCandidateSetUpdates")
+	tmjson.RegisterType(EventDataStandingMemberSetUpdates{}, "tendermint/event/StandingMemberSetUpdates")
 	tmjson.RegisterType(EventDataString(""), "tendermint/event/ProposalString")
+
+	tmjson.RegisterType(EventDataQrn{}, "tendermint/event/Qrn")
+	tmjson.RegisterType(EventDataVrf{}, "tendermint/event/Vrf")
+	tmjson.RegisterType(EventDataSettingSteeringMember{}, "tendermint/event/SetEventDataSettingSteeringMember")
+
 }
 
 // Most event messages are basic types (a block, a transaction)
@@ -66,6 +79,7 @@ type EventDataNewBlock struct {
 
 	ResultBeginBlock abci.ResponseBeginBlock `json:"result_begin_block"`
 	ResultEndBlock   abci.ResponseEndBlock   `json:"result_end_block"`
+	ConsensusInfo    abci.ConsensusInfo      `json:"consensus_info"`
 }
 
 type EventDataNewBlockHeader struct {
@@ -119,10 +133,27 @@ type EventDataVote struct {
 	Vote *Vote
 }
 
+// Add event
+type EventDataQrn struct {
+	Qrn *Qrn
+}
+
+type EventDataVrf struct {
+	Vrf *Vrf
+}
+
+type EventDataSettingSteeringMember struct {
+	SettingSteeringMember *SettingSteeringMember
+}
+
 type EventDataString string
 
-type EventDataValidatorSetUpdates struct {
-	ValidatorUpdates []*Validator `json:"validator_updates"`
+type EventDataSteeringMemberCandidateSetUpdates struct {
+	SteeringMemberCandidateUpdates []*SteeringMemberCandidate `json:"steering_member_candidate_updates"`
+}
+
+type EventDataStandingMemberSetUpdates struct {
+	StandingMemberUpdates []*StandingMember `json:"standing_member_updates"`
 }
 
 // PUBSUB
@@ -143,22 +174,27 @@ const (
 )
 
 var (
-	EventQueryCompleteProposal    = QueryForEvent(EventCompleteProposal)
-	EventQueryLock                = QueryForEvent(EventLock)
-	EventQueryNewBlock            = QueryForEvent(EventNewBlock)
-	EventQueryNewBlockHeader      = QueryForEvent(EventNewBlockHeader)
-	EventQueryNewEvidence         = QueryForEvent(EventNewEvidence)
-	EventQueryNewRound            = QueryForEvent(EventNewRound)
-	EventQueryNewRoundStep        = QueryForEvent(EventNewRoundStep)
-	EventQueryPolka               = QueryForEvent(EventPolka)
-	EventQueryRelock              = QueryForEvent(EventRelock)
-	EventQueryTimeoutPropose      = QueryForEvent(EventTimeoutPropose)
-	EventQueryTimeoutWait         = QueryForEvent(EventTimeoutWait)
-	EventQueryTx                  = QueryForEvent(EventTx)
-	EventQueryUnlock              = QueryForEvent(EventUnlock)
-	EventQueryValidatorSetUpdates = QueryForEvent(EventValidatorSetUpdates)
-	EventQueryValidBlock          = QueryForEvent(EventValidBlock)
-	EventQueryVote                = QueryForEvent(EventVote)
+	EventQueryCompleteProposal                  = QueryForEvent(EventCompleteProposal)
+	EventQueryLock                              = QueryForEvent(EventLock)
+	EventQueryNewBlock                          = QueryForEvent(EventNewBlock)
+	EventQueryNewBlockHeader                    = QueryForEvent(EventNewBlockHeader)
+	EventQueryNewEvidence                       = QueryForEvent(EventNewEvidence)
+	EventQueryNewRound                          = QueryForEvent(EventNewRound)
+	EventQueryNewRoundStep                      = QueryForEvent(EventNewRoundStep)
+	EventQueryPolka                             = QueryForEvent(EventPolka)
+	EventQueryRelock                            = QueryForEvent(EventRelock)
+	EventQueryTimeoutPropose                    = QueryForEvent(EventTimeoutPropose)
+	EventQueryTimeoutWait                       = QueryForEvent(EventTimeoutWait)
+	EventQueryTx                                = QueryForEvent(EventTx)
+	EventQueryUnlock                            = QueryForEvent(EventUnlock)
+	EventQuerySteeringMemberCandidateSetUpdates = QueryForEvent(EventSteeringMemberCandidateSetUpdates)
+	EventQueryStandingMemberSetUpdates          = QueryForEvent(EventStandingMemberSetUpdates)
+	EventQueryValidBlock                        = QueryForEvent(EventValidBlock)
+	EventQueryVote                              = QueryForEvent(EventVote)
+
+	EventQueryQrn                   = QueryForEvent(EventQrn)
+	EventQueryVrf                   = QueryForEvent(EventVrf)
+	EventQuerySettingSteeringMember = QueryForEvent(EventSettingSteeringMember)
 )
 
 func EventQueryTxFor(tx Tx) tmpubsub.Query {
@@ -175,7 +211,8 @@ type BlockEventPublisher interface {
 	PublishEventNewBlockHeader(header EventDataNewBlockHeader) error
 	PublishEventNewEvidence(evidence EventDataNewEvidence) error
 	PublishEventTx(EventDataTx) error
-	PublishEventValidatorSetUpdates(EventDataValidatorSetUpdates) error
+	PublishEventSteeringMemberCandidateSetUpdates(EventDataSteeringMemberCandidateSetUpdates) error
+	PublishEventStandingMemberSetUpdates(EventDataStandingMemberSetUpdates) error
 }
 
 type TxEventPublisher interface {

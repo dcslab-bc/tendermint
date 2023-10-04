@@ -1,6 +1,7 @@
 package types
 
 import (
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -8,12 +9,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/crypto/tmhash"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	tmversion "github.com/tendermint/tendermint/proto/tendermint/version"
-	"github.com/tendermint/tendermint/version"
+	"github.com/reapchain/reapchain-core/crypto"
+	"github.com/reapchain/reapchain-core/crypto/tmhash"
+	tmrand "github.com/reapchain/reapchain-core/libs/rand"
+	tmproto "github.com/reapchain/reapchain-core/proto/podc/types"
+	tmversion "github.com/reapchain/reapchain-core/proto/podc/version"
+	"github.com/reapchain/reapchain-core/version"
 )
 
 var defaultVoteTime = time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -143,7 +144,10 @@ func TestLightClientAttackEvidenceBasic(t *testing.T) {
 			ByzantineValidators: valSet.Validators[:nValidators/2],
 		}
 		hash := lcae.Hash()
+		fmt.Println()
+		fmt.Println("hihi", lcae.Height(), hash, lcae.Hash(), tc.testName)
 		tc.malleateEvidence(lcae)
+
 		assert.NotEqual(t, hash, lcae.Hash(), tc.testName)
 	}
 }

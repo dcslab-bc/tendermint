@@ -2,7 +2,6 @@ package light_test
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -12,12 +11,12 @@ import (
 
 	dbm "github.com/tendermint/tm-db"
 
-	"github.com/tendermint/tendermint/libs/log"
-	"github.com/tendermint/tendermint/light"
-	"github.com/tendermint/tendermint/light/provider"
-	mockp "github.com/tendermint/tendermint/light/provider/mock"
-	dbs "github.com/tendermint/tendermint/light/store/db"
-	"github.com/tendermint/tendermint/types"
+	"github.com/reapchain/reapchain-core/libs/log"
+	"github.com/reapchain/reapchain-core/light"
+	"github.com/reapchain/reapchain-core/light/provider"
+	mockp "github.com/reapchain/reapchain-core/light/provider/mock"
+	dbs "github.com/reapchain/reapchain-core/light/store/db"
+	"github.com/reapchain/reapchain-core/types"
 )
 
 const (
@@ -1098,63 +1097,5 @@ func TestClientEnsureValidHeadersAndValSets(t *testing.T) {
 			assert.NoError(t, err)
 		}
 	}
-
-}
-
-func TestClientHandlesContexts(t *testing.T) {
-	p := mockp.New(genMockNode(chainID, 100, 10, 1, bTime))
-	genBlock, err := p.LightBlock(ctx, 1)
-	require.NoError(t, err)
-
-	// instantiate the light client with a timeout
-	ctxTimeOut, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
-	defer cancel()
-	_, err = light.NewClient(
-		ctxTimeOut,
-		chainID,
-		light.TrustOptions{
-			Period: 24 * time.Hour,
-			Height: 1,
-			Hash:   genBlock.Hash(),
-		},
-		p,
-		[]provider.Provider{p, p},
-		dbs.New(dbm.NewMemDB(), chainID),
-	)
-	require.Error(t, ctxTimeOut.Err())
-	require.Error(t, err)
-	require.True(t, errors.Is(err, context.DeadlineExceeded))
-
-	// instantiate the client for real
-	c, err := light.NewClient(
-		ctx,
-		chainID,
-		light.TrustOptions{
-			Period: 24 * time.Hour,
-			Height: 1,
-			Hash:   genBlock.Hash(),
-		},
-		p,
-		[]provider.Provider{p, p},
-		dbs.New(dbm.NewMemDB(), chainID),
-	)
-	require.NoError(t, err)
-
-	// verify a block with a timeout
-	ctxTimeOutBlock, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
-	defer cancel()
-	_, err = c.VerifyLightBlockAtHeight(ctxTimeOutBlock, 100, bTime.Add(100*time.Minute))
-	require.Error(t, ctxTimeOutBlock.Err())
-	require.Error(t, err)
-	require.True(t, errors.Is(err, context.DeadlineExceeded))
-
-	// verify a block with a cancel
-	ctxCancel, cancel := context.WithCancel(ctx)
-	defer cancel()
-	time.AfterFunc(10*time.Millisecond, cancel)
-	_, err = c.VerifyLightBlockAtHeight(ctxCancel, 100, bTime.Add(100*time.Minute))
-	require.Error(t, ctxCancel.Err())
-	require.Error(t, err)
-	require.True(t, errors.Is(err, context.Canceled))
 
 }

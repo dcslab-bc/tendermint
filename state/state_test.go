@@ -13,15 +13,19 @@ import (
 
 	dbm "github.com/tendermint/tm-db"
 
-	abci "github.com/tendermint/tendermint/abci/types"
-	cfg "github.com/tendermint/tendermint/config"
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	cryptoenc "github.com/tendermint/tendermint/crypto/encoding"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
-	tmstate "github.com/tendermint/tendermint/proto/tendermint/state"
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	sm "github.com/tendermint/tendermint/state"
-	"github.com/tendermint/tendermint/types"
+	abci "github.com/reapchain/reapchain-core/abci/types"
+	cfg "github.com/reapchain/reapchain-core/config"
+	"github.com/reapchain/reapchain-core/crypto/ed25519"
+	cryptoenc "github.com/reapchain/reapchain-core/crypto/encoding"
+	tmrand "github.com/reapchain/reapchain-core/libs/rand"
+	tmstate "github.com/reapchain/reapchain-core/proto/podc/state"
+	tmproto "github.com/reapchain/reapchain-core/proto/podc/types"
+	sm "github.com/reapchain/reapchain-core/state"
+	"github.com/reapchain/reapchain-core/types"
+)
+
+const (
+	validatorType = "standing"
 )
 
 // setupTestCase does setup common to all test cases.
@@ -110,7 +114,7 @@ func TestABCIResponsesSaveLoad1(t *testing.T) {
 	abciResponses.DeliverTxs[0] = &abci.ResponseDeliverTx{Data: []byte("foo"), Events: nil}
 	abciResponses.DeliverTxs[1] = &abci.ResponseDeliverTx{Data: []byte("bar"), Log: "ok", Events: nil}
 	abciResponses.EndBlock = &abci.ResponseEndBlock{ValidatorUpdates: []abci.ValidatorUpdate{
-		types.TM2PB.NewValidatorUpdate(ed25519.GenPrivKey().PubKey(), 10),
+		types.TM2PB.NewValidatorUpdate(ed25519.GenPrivKey().PubKey(), 10, "standing"),
 	}}
 
 	err := stateStore.SaveABCIResponses(block.Height, abciResponses)
@@ -278,6 +282,7 @@ func TestOneValidatorChangesSaveLoad(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+
 	// On each height change, increment the power by one.
 	testCases := make([]int64, highestHeight)
 	changeIndex = 0
@@ -366,7 +371,7 @@ func TestProposerFrequency(t *testing.T) {
 			privVal := types.NewMockPV()
 			pubKey, err := privVal.GetPubKey()
 			require.NoError(t, err)
-			val := types.NewValidator(pubKey, votePower)
+			val := types.NewValidator(pubKey, votePower, validatorType)
 			val.ProposerPriority = tmrand.Int64()
 			vals[j] = val
 		}
@@ -383,7 +388,7 @@ func genValSetWithPowers(powers []int64) *types.ValidatorSet {
 	totalVotePower := int64(0)
 	for i := 0; i < size; i++ {
 		totalVotePower += powers[i]
-		val := types.NewValidator(ed25519.GenPrivKey().PubKey(), powers[i])
+		val := types.NewValidator(ed25519.GenPrivKey().PubKey(), powers[i], validatorType)
 		val.ProposerPriority = tmrand.Int64()
 		vals[i] = val
 	}
@@ -405,7 +410,7 @@ func testProposerFreq(t *testing.T, caseNum int, valSet *types.ValidatorSet) {
 		prop := valSet.GetProposer()
 		idx, _ := valSet.GetByAddress(prop.Address)
 		freqs[idx]++
-		valSet.IncrementProposerPriority(1)
+		// valSet.IncrementProposerPriority(1) //not used for PoDC
 	}
 
 	// assert frequencies match expected (max off by 1)
@@ -429,7 +434,7 @@ func testProposerFreq(t *testing.T, caseNum int, valSet *types.ValidatorSet) {
 }
 
 // TestProposerPriorityDoesNotGetResetToZero assert that we preserve accum when calling updateState
-// see https://github.com/tendermint/tendermint/issues/2718
+// see https://github.com/reapchain/reapchain-core/issues/2718
 func TestProposerPriorityDoesNotGetResetToZero(t *testing.T) {
 	tearDown, _, state := setupTestCase(t)
 	defer tearDown(t)
@@ -726,6 +731,7 @@ func TestLargeGenesisValidator(t *testing.T) {
 		Address:     genesisPubKey.Address(),
 		PubKey:      genesisPubKey,
 		VotingPower: genesisVotingPower,
+		Type:        validatorType,
 	}
 	// reset state validators to above validator
 	state.Validators = types.NewValidatorSet([]*types.Validator{genesisVal})
@@ -761,7 +767,7 @@ func TestLargeGenesisValidator(t *testing.T) {
 	// add more validators with same voting power as the 2nd
 	// let the genesis validator "unbond",
 	// see how long it takes until the effect wears off and both begin to alternate
-	// see: https://github.com/tendermint/tendermint/issues/2960
+	// see: https://github.com/reapchain/reapchain-core/issues/2960
 	firstAddedValPubKey := ed25519.GenPrivKey().PubKey()
 	firstAddedValVotingPower := int64(10)
 	fvp, err := cryptoenc.PubKeyToProto(firstAddedValPubKey)
@@ -903,7 +909,7 @@ func TestStoreLoadValidatorsIncrementsProposerPriority(t *testing.T) {
 	t.Cleanup(func() { tearDown(t) })
 	stateStore := sm.NewStore(stateDB)
 	state.Validators = genValSet(valSetSize)
-	state.NextValidators = state.Validators.CopyIncrementProposerPriority(1)
+	state.NextValidators = state.Validators.Copy()
 	err := stateStore.Save(state)
 	require.NoError(t, err)
 
@@ -929,7 +935,7 @@ func TestManyValidatorChangesSaveLoad(t *testing.T) {
 	stateStore := sm.NewStore(stateDB)
 	require.Equal(t, int64(0), state.LastBlockHeight)
 	state.Validators = genValSet(valSetSize)
-	state.NextValidators = state.Validators.CopyIncrementProposerPriority(1)
+	state.NextValidators = state.Validators.Copy()
 	err := stateStore.Save(state)
 	require.NoError(t, err)
 
@@ -1075,7 +1081,7 @@ func TestStateProto(t *testing.T) {
 			assert.NoError(t, err, tt.testName)
 		}
 
-		smt, err := sm.FromProto(pbs)
+		smt, err := sm.StateFromProto(pbs)
 		if tt.expPass2 {
 			require.NoError(t, err, tt.testName)
 			require.Equal(t, tt.state, smt, tt.testName)

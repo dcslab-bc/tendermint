@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/libs/log"
-	tmpubsub "github.com/tendermint/tendermint/libs/pubsub"
-	"github.com/tendermint/tendermint/libs/service"
+	"github.com/reapchain/reapchain-core/abci/types"
+	"github.com/reapchain/reapchain-core/libs/log"
+	tmpubsub "github.com/reapchain/reapchain-core/libs/pubsub"
+	"github.com/reapchain/reapchain-core/libs/service"
 )
 
 const defaultCapacity = 0
@@ -166,6 +166,22 @@ func (b *EventBus) PublishEventVote(data EventDataVote) error {
 	return b.Publish(EventVote, data)
 }
 
+
+// Add publish event function
+func (b *EventBus) PublishEventQrn(data EventDataQrn) error {
+	return b.Publish(EventQrn, data)
+}
+
+func (b *EventBus) PublishEventVrf(data EventDataVrf) error {
+	return b.Publish(EventVrf, data)
+}
+
+func (b *EventBus) PublishEventSettingSteeringMember(data EventDataSettingSteeringMember) error {
+	return b.Publish(EventSettingSteeringMember, data)
+}
+///--------------------------------------
+
+
 func (b *EventBus) PublishEventValidBlock(data EventDataRoundState) error {
 	return b.Publish(EventValidBlock, data)
 }
@@ -223,8 +239,12 @@ func (b *EventBus) PublishEventLock(data EventDataRoundState) error {
 	return b.Publish(EventLock, data)
 }
 
-func (b *EventBus) PublishEventValidatorSetUpdates(data EventDataValidatorSetUpdates) error {
-	return b.Publish(EventValidatorSetUpdates, data)
+func (b *EventBus) PublishEventSteeringMemberCandidateSetUpdates(data EventDataSteeringMemberCandidateSetUpdates) error {
+	return b.Publish(EventSteeringMemberCandidateSetUpdates, data)
+}
+
+func (b *EventBus) PublishEventStandingMemberSetUpdates(data EventDataStandingMemberSetUpdates) error {
+	return b.Publish(EventStandingMemberSetUpdates, data)
 }
 
 //-----------------------------------------------------------------------------
@@ -303,6 +323,10 @@ func (NopEventBus) PublishEventLock(data EventDataRoundState) error {
 	return nil
 }
 
-func (NopEventBus) PublishEventValidatorSetUpdates(data EventDataValidatorSetUpdates) error {
+func (NopEventBus) PublishEventSteeringMemberCandidateSetUpdates(data EventDataSteeringMemberCandidateSetUpdates) error {
+	return nil
+}
+
+func (NopEventBus) PublishEventStandingMemberSetUpdates(data EventDataStandingMemberSetUpdates) error {
 	return nil
 }

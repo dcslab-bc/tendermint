@@ -6,10 +6,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	cryptoenc "github.com/tendermint/tendermint/crypto/encoding"
+	abci "github.com/reapchain/reapchain-core/abci/types"
+	"github.com/reapchain/reapchain-core/crypto"
+	"github.com/reapchain/reapchain-core/crypto/ed25519"
+	cryptoenc "github.com/reapchain/reapchain-core/crypto/encoding"
 )
 
 func TestABCIPubKey(t *testing.T) {
@@ -31,9 +31,9 @@ func TestABCIValidators(t *testing.T) {
 	pkEd := ed25519.GenPrivKey().PubKey()
 
 	// correct validator
-	tmValExpected := NewValidator(pkEd, 10)
+	tmValExpected := NewValidator(pkEd, 10, validatorType)
 
-	tmVal := NewValidator(pkEd, 10)
+	tmVal := NewValidator(pkEd, 10, validatorType)
 
 	abciVal := TM2PB.ValidatorUpdate(tmVal)
 	tmVals, err := PB2TM.ValidatorUpdates([]abci.ValidatorUpdate{abciVal})
@@ -72,17 +72,17 @@ func (pubKeyEddie) Type() string                                { return "pubKey
 func TestABCIValidatorFromPubKeyAndPower(t *testing.T) {
 	pubkey := ed25519.GenPrivKey().PubKey()
 
-	abciVal := TM2PB.NewValidatorUpdate(pubkey, 10)
+	abciVal := TM2PB.NewValidatorUpdate(pubkey, 10, validatorType)
 	assert.Equal(t, int64(10), abciVal.Power)
 
-	assert.Panics(t, func() { TM2PB.NewValidatorUpdate(nil, 10) })
-	assert.Panics(t, func() { TM2PB.NewValidatorUpdate(pubKeyEddie{}, 10) })
+	assert.Panics(t, func() { TM2PB.NewValidatorUpdate(nil, 10, validatorType) })
+	assert.Panics(t, func() { TM2PB.NewValidatorUpdate(pubKeyEddie{}, 10, validatorType) })
 }
 
 func TestABCIValidatorWithoutPubKey(t *testing.T) {
 	pkEd := ed25519.GenPrivKey().PubKey()
 
-	abciVal := TM2PB.Validator(NewValidator(pkEd, 10))
+	abciVal := TM2PB.Validator(NewValidator(pkEd, 10, validatorType))
 
 	// pubkey must be nil
 	tmValExpected := abci.Validator{

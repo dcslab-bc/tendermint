@@ -10,10 +10,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	abci "github.com/tendermint/tendermint/abci/types"
-	tmpubsub "github.com/tendermint/tendermint/libs/pubsub"
-	tmquery "github.com/tendermint/tendermint/libs/pubsub/query"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
+	abci "github.com/reapchain/reapchain-core/abci/types"
+	tmpubsub "github.com/reapchain/reapchain-core/libs/pubsub"
+	tmquery "github.com/reapchain/reapchain-core/libs/pubsub/query"
+	tmrand "github.com/reapchain/reapchain-core/libs/rand"
 )
 
 func TestEventBusPublishEventTx(t *testing.T) {
@@ -366,7 +366,8 @@ func TestEventBusPublish(t *testing.T) {
 	require.NoError(t, err)
 	err = eventBus.PublishEventLock(EventDataRoundState{})
 	require.NoError(t, err)
-	err = eventBus.PublishEventValidatorSetUpdates(EventDataValidatorSetUpdates{})
+	err = eventBus.PublishEventStandingMemberSetUpdates(EventDataStandingMemberSetUpdates{})
+	err = eventBus.PublishEventSteeringMemberCandidateSetUpdates(EventDataSteeringMemberCandidateSetUpdates{})
 	require.NoError(t, err)
 
 	select {

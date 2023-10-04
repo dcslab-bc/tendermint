@@ -9,16 +9,20 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	abci "github.com/tendermint/tendermint/abci/types"
-	"github.com/tendermint/tendermint/crypto/ed25519"
-	cryptoenc "github.com/tendermint/tendermint/crypto/encoding"
-	"github.com/tendermint/tendermint/crypto/tmhash"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
-	"github.com/tendermint/tendermint/privval"
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	"github.com/tendermint/tendermint/rpc/client"
-	rpctest "github.com/tendermint/tendermint/rpc/test"
-	"github.com/tendermint/tendermint/types"
+	abci "github.com/reapchain/reapchain-core/abci/types"
+	"github.com/reapchain/reapchain-core/crypto/ed25519"
+	cryptoenc "github.com/reapchain/reapchain-core/crypto/encoding"
+	"github.com/reapchain/reapchain-core/crypto/tmhash"
+	tmrand "github.com/reapchain/reapchain-core/libs/rand"
+	"github.com/reapchain/reapchain-core/privval"
+	tmproto "github.com/reapchain/reapchain-core/proto/podc/types"
+	"github.com/reapchain/reapchain-core/rpc/client"
+	rpctest "github.com/reapchain/reapchain-core/rpc/test"
+	"github.com/reapchain/reapchain-core/types"
+)
+
+const (
+	validatorType = "standing"
 )
 
 // For some reason the empty node used in tests has a time of
@@ -42,7 +46,7 @@ func newEvidence(t *testing.T, val *privval.FilePV,
 	vote2.Signature, err = val.Key.PrivKey.Sign(types.VoteSignBytes(chainID, v2))
 	require.NoError(t, err)
 
-	validator := types.NewValidator(val.Key.PubKey, 10)
+	validator := types.NewValidator(val.Key.PubKey, 10, validatorType)
 	valSet := types.NewValidatorSet([]*types.Validator{validator})
 
 	return types.NewDuplicateVoteEvidence(vote, vote2, defaultTestTime, valSet)

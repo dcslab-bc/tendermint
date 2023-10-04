@@ -8,13 +8,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tendermint/tendermint/crypto"
-	"github.com/tendermint/tendermint/crypto/tmhash"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
-	cryptoproto "github.com/tendermint/tendermint/proto/tendermint/crypto"
-	privvalproto "github.com/tendermint/tendermint/proto/tendermint/privval"
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	"github.com/tendermint/tendermint/types"
+	"github.com/reapchain/reapchain-core/crypto"
+	"github.com/reapchain/reapchain-core/crypto/tmhash"
+	tmrand "github.com/reapchain/reapchain-core/libs/rand"
+	cryptoproto "github.com/reapchain/reapchain-core/proto/podc/crypto"
+	privvalproto "github.com/reapchain/reapchain-core/proto/podc/privval"
+	tmproto "github.com/reapchain/reapchain-core/proto/podc/types"
+	"github.com/reapchain/reapchain-core/types"
 )
 
 type signerTestCase struct {
@@ -398,6 +398,8 @@ func brokenHandler(privVal types.PrivValidator, request privvalproto.Message,
 	// This is broken and will answer most requests with a pubkey response
 	case *privvalproto.Message_PubKeyRequest:
 		res = mustWrapMsg(&privvalproto.PubKeyResponse{PubKey: cryptoproto.PublicKey{}, Error: nil})
+	case *privvalproto.Message_TypeRequest:
+		res = mustWrapMsg(&privvalproto.TypeResponse{Type: "", Error: nil})
 	case *privvalproto.Message_SignVoteRequest:
 		res = mustWrapMsg(&privvalproto.PubKeyResponse{PubKey: cryptoproto.PublicKey{}, Error: nil})
 	case *privvalproto.Message_SignProposalRequest:

@@ -6,8 +6,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	e2e "github.com/tendermint/tendermint/test/e2e/pkg"
-	"github.com/tendermint/tendermint/types"
+	e2e "github.com/reapchain/reapchain-core/test/e2e/pkg"
+	"github.com/reapchain/reapchain-core/types"
 )
 
 // Tests that validator sets are available and correct according to
@@ -155,7 +155,7 @@ func (s *validatorSchedule) Increment(heights int64) {
 				}
 			}
 		}
-		s.Set.IncrementProposerPriority(1)
+		// s.Set.IncrementProposerPriority(1) JH: delete, reapchain hasn't validator priority
 	}
 }
 

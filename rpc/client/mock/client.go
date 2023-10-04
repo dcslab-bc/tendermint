@@ -10,7 +10,7 @@ the server response you want to mock (eg. error handling),
 or if you just want to record the calls to verify in your tests.
 
 For real clients, you probably want the "http" package.  If you
-want to directly call a tendermint node in process, you can use the
+want to directly call a podc node in process, you can use the
 "local" package.
 */
 
@@ -18,13 +18,13 @@ import (
 	"context"
 	"reflect"
 
-	"github.com/tendermint/tendermint/libs/bytes"
-	"github.com/tendermint/tendermint/libs/service"
-	"github.com/tendermint/tendermint/rpc/client"
-	"github.com/tendermint/tendermint/rpc/core"
-	ctypes "github.com/tendermint/tendermint/rpc/core/types"
-	rpctypes "github.com/tendermint/tendermint/rpc/jsonrpc/types"
-	"github.com/tendermint/tendermint/types"
+	"github.com/reapchain/reapchain-core/libs/bytes"
+	"github.com/reapchain/reapchain-core/libs/service"
+	"github.com/reapchain/reapchain-core/rpc/client"
+	"github.com/reapchain/reapchain-core/rpc/core"
+	ctypes "github.com/reapchain/reapchain-core/rpc/core/types"
+	rpctypes "github.com/reapchain/reapchain-core/rpc/jsonrpc/types"
+	"github.com/reapchain/reapchain-core/types"
 )
 
 // Client wraps arbitrary implementations of the various interfaces.
@@ -176,4 +176,28 @@ func (c Client) Validators(ctx context.Context, height *int64, page, perPage *in
 
 func (c Client) BroadcastEvidence(ctx context.Context, ev types.Evidence) (*ctypes.ResultBroadcastEvidence, error) {
 	return core.BroadcastEvidence(&rpctypes.Context{}, ev)
+}
+
+func (c Client) StandingMembers(ctx context.Context, height *int64) (*ctypes.ResultStandingMembers, error) {
+	return core.StandingMembers(&rpctypes.Context{}, height)
+}
+
+func (c Client) Qrns(ctx context.Context, height *int64) (*ctypes.ResultQrns, error) {
+	return core.Qrns(&rpctypes.Context{}, height)
+}
+
+func (c Client) NextQrns(ctx context.Context, height *int64) (*ctypes.ResultQrns, error) {
+	return core.NextQrns(&rpctypes.Context{}, height)
+}
+
+func (c Client) SettingSteeringMember(ctx context.Context, height *int64) (*ctypes.ResultSettingSteeringMember, error) {
+	return core.SettingSteeringMember(&rpctypes.Context{}, height)
+}
+
+func (c Client) Vrfs(ctx context.Context, height *int64) (*ctypes.ResultVrfs, error) {
+	return core.Vrfs(&rpctypes.Context{}, height)
+}
+
+func (c Client) NextVrfs(ctx context.Context, height *int64) (*ctypes.ResultVrfs, error) {
+	return core.NextVrfs(&rpctypes.Context{}, height)
 }

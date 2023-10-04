@@ -8,12 +8,12 @@ import (
 	"io/ioutil"
 	"time"
 
-	"github.com/tendermint/tendermint/crypto"
-	tmbytes "github.com/tendermint/tendermint/libs/bytes"
-	tmjson "github.com/tendermint/tendermint/libs/json"
-	tmos "github.com/tendermint/tendermint/libs/os"
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	tmtime "github.com/tendermint/tendermint/types/time"
+	"github.com/reapchain/reapchain-core/crypto"
+	tmbytes "github.com/reapchain/reapchain-core/libs/bytes"
+	tmjson "github.com/reapchain/reapchain-core/libs/json"
+	tmos "github.com/reapchain/reapchain-core/libs/os"
+	tmproto "github.com/reapchain/reapchain-core/proto/podc/types"
+	tmtime "github.com/reapchain/reapchain-core/types/time"
 )
 
 const (
@@ -25,17 +25,26 @@ const (
 // core types for a genesis definition
 // NOTE: any changes to the genesis definition should
 // be reflected in the documentation:
-// docs/tendermint-core/using-tendermint.md
+// docs/reapchain-core-core/using-reapchain-core.md
 
 // GenesisValidator is an initial validator.
 type GenesisValidator struct {
 	Address Address       `json:"address"`
 	PubKey  crypto.PubKey `json:"pub_key"`
+	Type  	string 				`json:"type"`
 	Power   int64         `json:"power"`
 	Name    string        `json:"name"`
 }
 
-// GenesisDoc defines the initial conditions for a tendermint blockchain, in particular its validator set.
+// GenesisStandingMember is an initial standingMember.
+type GenesisMember struct {
+	Address Address       `json:"address"`
+	PubKey  crypto.PubKey `json:"pub_key"`
+	Name    string        `json:"name"`
+	Power   int64         `json:"power"`
+}
+
+// GenesisDoc defines the initial conditions for a reapchain-core blockchain, in particular its validator set.
 type GenesisDoc struct {
 	GenesisTime     time.Time                `json:"genesis_time"`
 	ChainID         string                   `json:"chain_id"`
@@ -44,6 +53,13 @@ type GenesisDoc struct {
 	Validators      []GenesisValidator       `json:"validators,omitempty"`
 	AppHash         tmbytes.HexBytes         `json:"app_hash"`
 	AppState        json.RawMessage          `json:"app_state,omitempty"`
+	StandingMembers          []GenesisMember          `json:"standing_members,omitempty"`
+	ConsensusRound           ConsensusRound           `json:"consensus_round"`
+	Qrns                     []Qrn                    `json:"qrns,omitempty"`
+	SteeringMemberCandidates []GenesisMember          `json:"steering_member_candidates"`
+	Vrfs                     []Vrf                    `json:"vrfs"`
+	NextQrns                     []Qrn                    `json:"next_qrns,omitempty"`
+	NextVrfs                     []Vrf                    `json:"next_vrfs"`
 }
 
 // SaveAs is a utility method for saving GenensisDoc as a JSON file.
@@ -59,7 +75,7 @@ func (genDoc *GenesisDoc) SaveAs(file string) error {
 func (genDoc *GenesisDoc) ValidatorHash() []byte {
 	vals := make([]*Validator, len(genDoc.Validators))
 	for i, v := range genDoc.Validators {
-		vals[i] = NewValidator(v.PubKey, v.Power)
+		vals[i] = NewValidator(v.PubKey, v.Power, v.Type)
 	}
 	vset := NewValidatorSet(vals)
 	return vset.Hash()
@@ -98,6 +114,46 @@ func (genDoc *GenesisDoc) ValidateAndComplete() error {
 			genDoc.Validators[i].Address = v.PubKey.Address()
 		}
 	}
+
+	for i, standingMember := range genDoc.StandingMembers {
+
+		if standingMember.Power == 0 {
+			return fmt.Errorf("the genesis file cannot contain standingMembers with no voting power: %v", standingMember)
+		}
+		if len(standingMember.Address) > 0 && !bytes.Equal(standingMember.PubKey.Address(), standingMember.Address) {
+			return fmt.Errorf("incorrect address for validator %v in the genesis file, should be %v", standingMember, standingMember.PubKey.Address())
+		}
+		if len(standingMember.Address) == 0 {
+			genDoc.StandingMembers[i].Address = standingMember.PubKey.Address()
+		}
+	}
+
+	if genDoc.Qrns != nil {
+		for _, qrn := range genDoc.Qrns {
+			if err := qrn.ValidateBasic(); err != nil {
+				return fmt.Errorf("Qrn error: %v", err)
+			}
+
+			if qrn.Signature != nil {
+				if qrn.VerifySign() == false {
+					return fmt.Errorf("Incorrect sign of qrn")
+				}
+			}
+		}
+	}
+
+	if genDoc.Vrfs != nil {
+		for _, vrf := range genDoc.Vrfs {
+			if err := vrf.ValidateBasic(); err != nil {
+				return fmt.Errorf("Qrn error: %v", err)
+			}
+
+			if vrf.Verify() == false {
+				return fmt.Errorf("Incorrect sign of vrf")
+			}
+		}
+	}
+
 
 	if genDoc.GenesisTime.IsZero() {
 		genDoc.GenesisTime = tmtime.Now()
