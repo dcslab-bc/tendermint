@@ -213,8 +213,8 @@ func (blockExec *BlockExecutor) Commit(
 	block *types.Block,
 	deliverTxResponses []*abci.ResponseDeliverTx,
 ) ([]byte, int64, error) {
-	// blockExec.mempool.Lock()
-	// defer blockExec.mempool.Unlock()
+	blockExec.mempool.Lock()
+	defer blockExec.mempool.Unlock()
 
 	// while mempool is Locked, flush to ensure all async requests have completed
 	// in the ABCI app before Commit.
@@ -240,16 +240,14 @@ func (blockExec *BlockExecutor) Commit(
 	)
 
 	// Update mempool.
-	blockExec.mempool.Lock()
-	defer blockExec.mempool.Unlock()
-	err = blockExec.mempool.Update(block, deliverTxResponses, TxPreCheck(state), TxPostCheck(state))
-	// err = blockExec.mempool.Update(
-	// 	block.Height,
-	// 	block.Txs,
-	// 	deliverTxResponses,
-	// 	TxPreCheck(state),
-	// 	TxPostCheck(state),
-	// )
+	err = blockExec.mempool.Update(
+		// block.Height,
+		// block.Txs,
+		block,
+		deliverTxResponses,
+		TxPreCheck(state),
+		TxPostCheck(state),
+	)
 
 	return res.Data, res.RetainHeight, err
 }

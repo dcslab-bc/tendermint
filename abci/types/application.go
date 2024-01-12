@@ -15,11 +15,10 @@ type Application interface {
 	Query(RequestQuery) ResponseQuery             // Query for state
 
 	// Mempool Connection
-	// 230724_HJSONG_EXP_START
+	// CheckTx(RequestCheckTx) ResponseCheckTx // Validate a tx for the mempool
 	CheckTx(RequestCheckTx) ResponseCheckTx                      // Validate a tx for the mempool
 	BeginRecheckTx(RequestBeginRecheckTx) ResponseBeginRecheckTx // Signals the beginning of rechecking
 	EndRecheckTx(RequestEndRecheckTx) ResponseEndRecheckTx       // Signals the end of rechecking
-	// EXP_END
 
 	// Consensus Connection
 	InitChain(RequestInitChain) ResponseInitChain    // Initialize blockchain w validators/other info from TendermintCore
@@ -63,15 +62,6 @@ func (BaseApplication) CheckTx(req RequestCheckTx) ResponseCheckTx {
 	return ResponseCheckTx{Code: CodeTypeOK}
 }
 
-// 230724_HJSONG_EXP_START
-func (BaseApplication) BeginRecheckTx(req RequestBeginRecheckTx) ResponseBeginRecheckTx {
-	return ResponseBeginRecheckTx{Code: CodeTypeOK}
-}
-
-func (BaseApplication) EndRecheckTx(req RequestEndRecheckTx) ResponseEndRecheckTx {
-	return ResponseEndRecheckTx{Code: CodeTypeOK}
-} // EXP_END
-
 func (BaseApplication) Commit() ResponseCommit {
 	return ResponseCommit{}
 }
@@ -90,6 +80,14 @@ func (BaseApplication) BeginBlock(req RequestBeginBlock) ResponseBeginBlock {
 
 func (BaseApplication) EndBlock(req RequestEndBlock) ResponseEndBlock {
 	return ResponseEndBlock{}
+}
+
+func (BaseApplication) BeginRecheckTx(req RequestBeginRecheckTx) ResponseBeginRecheckTx {
+	return ResponseBeginRecheckTx{Code: CodeTypeOK}
+}
+
+func (BaseApplication) EndRecheckTx(req RequestEndRecheckTx) ResponseEndRecheckTx {
+	return ResponseEndRecheckTx{Code: CodeTypeOK}
 }
 
 func (BaseApplication) ListSnapshots(req RequestListSnapshots) ResponseListSnapshots {
@@ -147,18 +145,6 @@ func (app *GRPCApplication) CheckTx(ctx context.Context, req *RequestCheckTx) (*
 	return &res, nil
 }
 
-// 230724_HJSONG_EXP_START
-func (app *GRPCApplication) BeginRecheckTx(ctx context.Context, req *RequestBeginRecheckTx) (
-	*ResponseBeginRecheckTx, error) {
-	res := app.app.BeginRecheckTx(*req)
-	return &res, nil
-}
-
-func (app *GRPCApplication) EndRecheckTx(ctx context.Context, req *RequestEndRecheckTx) (*ResponseEndRecheckTx, error) {
-	res := app.app.EndRecheckTx(*req)
-	return &res, nil
-} // EXP_END
-
 func (app *GRPCApplication) Query(ctx context.Context, req *RequestQuery) (*ResponseQuery, error) {
 	res := app.app.Query(*req)
 	return &res, nil
@@ -181,6 +167,17 @@ func (app *GRPCApplication) BeginBlock(ctx context.Context, req *RequestBeginBlo
 
 func (app *GRPCApplication) EndBlock(ctx context.Context, req *RequestEndBlock) (*ResponseEndBlock, error) {
 	res := app.app.EndBlock(*req)
+	return &res, nil
+}
+
+func (app *GRPCApplication) BeginRecheckTx(ctx context.Context, req *RequestBeginRecheckTx) (
+	*ResponseBeginRecheckTx, error) {
+	res := app.app.BeginRecheckTx(*req)
+	return &res, nil
+}
+
+func (app *GRPCApplication) EndRecheckTx(ctx context.Context, req *RequestEndRecheckTx) (*ResponseEndRecheckTx, error) {
+	res := app.app.EndRecheckTx(*req)
 	return &res, nil
 }
 

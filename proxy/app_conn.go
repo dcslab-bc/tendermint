@@ -5,7 +5,8 @@ import (
 	"github.com/tendermint/tendermint/abci/types"
 )
 
-//go:generate ../scripts/mockery_generate.sh AppConnConsensus|AppConnMempool|AppConnQuery|AppConnSnapshot
+//nolint
+//go:generate mockery --case underscore --name AppConnConsensus|AppConnMempool|AppConnQuery|AppConnSnapshot|ClientCreator
 
 //----------------------------------------------------------------------------------------
 // Enforce which abci msgs can be sent on a connection at the type level
@@ -27,8 +28,10 @@ type AppConnMempool interface {
 	Error() error
 
 	CheckTxAsync(types.RequestCheckTx) *abcicli.ReqRes
-	CheckTxSync(types.RequestCheckTx) (*types.ResponseCheckTx, error)
+	BeginRecheckTxAsync(types.RequestBeginRecheckTx) *abcicli.ReqRes
+	EndRecheckTxAsync(types.RequestEndRecheckTx) *abcicli.ReqRes
 
+	CheckTxSync(types.RequestCheckTx) (*types.ResponseCheckTx, error)
 	BeginRecheckTxSync(types.RequestBeginRecheckTx) (*types.ResponseBeginRecheckTx, error)
 	EndRecheckTxSync(types.RequestEndRecheckTx) (*types.ResponseEndRecheckTx, error)
 
@@ -127,6 +130,14 @@ func (app *appConnMempool) FlushSync() error {
 
 func (app *appConnMempool) CheckTxAsync(req types.RequestCheckTx) *abcicli.ReqRes {
 	return app.appConn.CheckTxAsync(req)
+}
+
+func (app *appConnMempool) BeginRecheckTxAsync(req types.RequestBeginRecheckTx) *abcicli.ReqRes {
+	return app.appConn.BeginRecheckTxAsync(req)
+}
+
+func (app *appConnMempool) EndRecheckTxAsync(req types.RequestEndRecheckTx) *abcicli.ReqRes {
+	return app.appConn.EndRecheckTxAsync(req)
 }
 
 func (app *appConnMempool) CheckTxSync(req types.RequestCheckTx) (*types.ResponseCheckTx, error) {

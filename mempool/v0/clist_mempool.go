@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	abci "github.com/tendermint/tendermint/abci/types"
 	"github.com/tendermint/tendermint/config"
@@ -583,7 +584,7 @@ func (mem *CListMempool) Update(
 	deliverTxResponses []*abci.ResponseDeliverTx,
 	preCheck mempool.PreCheckFunc,
 	postCheck mempool.PostCheckFunc,
-) error {
+) (err error) {
 	// Set height
 	// mem.height = height
 	mem.height = block.Height
@@ -621,35 +622,82 @@ func (mem *CListMempool) Update(
 		}
 	}
 
-	// Either recheck non-committed txs to see if they became invalid
-	// or just notify there're some txs left.
-	if mem.Size() > 0 {
-		if mem.config.Recheck {
-			// mem.logger.Debug("recheck txs", "numtxs", mem.Size(), "height", height)
-			// mem.recheckTxs()
-			mem.logger.Info("Recheck txs", "numtxs", mem.Size(), "height", block.Height)
-			mem.proxyAppConn.BeginRecheckTxSync(abci.RequestBeginRecheckTx{
-				Header: types.TM2PB.Header(&block.Header),
-			})
-			mem.recheckTxs()
-			mem.proxyAppConn.EndRecheckTxSync(abci.RequestEndRecheckTx{Height: block.Height})
-			// At this point, mem.txs are being rechecked.
-			// mem.recheckCursor re-scans mem.txs and possibly removes some txs.
-			// Before mem.Reap(), we should wait for mem.recheckCursor to be nil.
-		} else {
-			mem.notifyTxsAvailable()
+	/*
+		// Either recheck non-committed txs to see if they became invalid
+		// or just notify there're some txs left.
+		if mem.Size() > 0 {
+			if mem.config.Recheck {
+				// mem.logger.Debug("recheck txs", "numtxs", mem.Size(), "height", height)
+				// mem.recheckTxs()
+				mem.logger.Debug("recheck txs", "numtxs", mem.Size(), "height", block.Height)
+				res, err := mem.proxyAppConn.BeginRecheckTxSync(abci.RequestBeginRecheckTx{
+					Header: types.TM2PB.Header(&block.Header),
+				})
+				if res.Code == abci.CodeTypeOK && err == nil {
+					mem.recheckTxs()
+					res2, err2 := mem.proxyAppConn.EndRecheckTxSync(abci.RequestEndRecheckTx{Height: block.Height})
+					if res2.Code != abci.CodeTypeOK {
+						return errors.New("the function EndRecheckTxSync does not respond CodeTypeOK")
+					}
+					if err2 != nil {
+						return errors.Wrap(err2, "the function EndRecheckTxSync returns an error")
+					}
+				} else {
+					if res.Code != abci.CodeTypeOK {
+						return errors.New("the function BeginRecheckTxSync does not respond CodeTypeOK")
+					}
+					if err != nil {
+						return errors.Wrap(err, "the function BeginRecheckTxSync returns an error")
+					}
+				}
+				// At this point, mem.txs are being rechecked.
+				// mem.recheckCursor re-scans mem.txs and possibly removes some txs.
+				// Before mem.Reap(), we should wait for mem.recheckCursor to be nil.
+			} else {
+				mem.notifyTxsAvailable()
+			}
 		}
-	}
+	*/
+	if mem.config.Recheck {
+		// recheck non-committed txs to see if they became invalid
+		recheckStartTime := time.Now().UnixNano()
+		_, err = mem.proxyAppConn.BeginRecheckTxSync(abci.RequestBeginRecheckTx{
+			Header: types.TM2PB.Header(&block.Header),
+		})
+		if err != nil {
+			mem.logger.Error("error in proxyAppConn.BeginRecheckTxSync", "err", err)
+		}
 
+		mem.logger.Info("recheck txs", "numtxs", mem.Size(), "height", block.Height)
+		mem.recheckTxs()
+
+		_, err = mem.proxyAppConn.EndRecheckTxSync(abci.RequestEndRecheckTx{Height: block.Height})
+		if err != nil {
+			mem.logger.Error("error in proxyAppConn.EndRecheckTxSync", "err", err)
+		}
+
+		recheckEndTime := time.Now().UnixNano()
+
+		recheckTimeMs := float64(recheckEndTime-recheckStartTime) / 1000000
+		mem.metrics.RecheckTime.Set(recheckTimeMs)
+
+		// At this point, mem.txs are being rechecked.
+		// mem.recheckCursor re-scans mem.txs and possibly removes some txs.
+		// Before mem.Reap(), we should wait for mem.recheckCursor to be nil.
+	} else if mem.Size() > 0 {
+		// just notify there're some txs left.
+		mem.notifyTxsAvailable()
+	}
 	// Update metrics
 	mem.metrics.Size.Set(float64(mem.Size()))
 
-	return nil
+	// return nil
+	return err
 }
-
 func (mem *CListMempool) recheckTxs() {
 	if mem.Size() == 0 {
-		panic("recheckTxs is called, but the mempool is empty")
+		// panic("recheckTxs is called, but the mempool is empty")
+		return
 	}
 
 	mem.recheckCursor = mem.txs.Front()

@@ -135,7 +135,6 @@ func ToRequestEndBlock(req RequestEndBlock) *Request {
 	}
 }
 
-// 230724_HJSONG_EXP_START
 func ToRequestBeginRecheckTx(req RequestBeginRecheckTx) *Request {
 	return &Request{
 		Value: &Request_BeginRecheckTx{&req},
@@ -146,7 +145,7 @@ func ToRequestEndRecheckTx(req RequestEndRecheckTx) *Request {
 	return &Request{
 		Value: &Request_EndRecheckTx{&req},
 	}
-} // EXP_END
+}
 
 func ToRequestListSnapshots(req RequestListSnapshots) *Request {
 	return &Request{
@@ -246,7 +245,6 @@ func ToResponseEndBlock(res ResponseEndBlock) *Response {
 	}
 }
 
-// 230724_HJSONG_EXP_START
 func ToResponseBeginRecheckTx(res ResponseBeginRecheckTx) *Response {
 	return &Response{
 		Value: &Response_BeginRecheckTx{&res},
@@ -257,7 +255,7 @@ func ToResponseEndRecheckTx(res ResponseEndRecheckTx) *Response {
 	return &Response{
 		Value: &Response_EndRecheckTx{&res},
 	}
-} // EXP_END
+}
 
 func ToResponseListSnapshots(res ResponseListSnapshots) *Response {
 	return &Response{

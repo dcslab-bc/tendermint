@@ -264,6 +264,24 @@ func (cli *grpcClient) EndBlockAsync(params types.RequestEndBlock) *ReqRes {
 	return cli.finishAsyncCall(req, &types.Response{Value: &types.Response_EndBlock{EndBlock: res}})
 }
 
+func (cli *grpcClient) BeginRecheckTxAsync(params types.RequestBeginRecheckTx) *ReqRes {
+	req := types.ToRequestBeginRecheckTx(params)
+	res, err := cli.client.BeginRecheckTx(context.Background(), req.GetBeginRecheckTx(), grpc.WaitForReady(true))
+	if err != nil {
+		cli.StopForError(err)
+	}
+	return cli.finishAsyncCall(req, &types.Response{Value: &types.Response_BeginRecheckTx{BeginRecheckTx: res}})
+}
+
+func (cli *grpcClient) EndRecheckTxAsync(params types.RequestEndRecheckTx) *ReqRes {
+	req := types.ToRequestEndRecheckTx(params)
+	res, err := cli.client.EndRecheckTx(context.Background(), req.GetEndRecheckTx(), grpc.WaitForReady(true))
+	if err != nil {
+		cli.StopForError(err)
+	}
+	return cli.finishAsyncCall(req, &types.Response{Value: &types.Response_EndRecheckTx{EndRecheckTx: res}})
+}
+
 func (cli *grpcClient) ListSnapshotsAsync(params types.RequestListSnapshots) *ReqRes {
 	req := types.ToRequestListSnapshots(params)
 	res, err := cli.client.ListSnapshots(context.Background(), req.GetListSnapshots(), grpc.WaitForReady(true))
@@ -299,25 +317,6 @@ func (cli *grpcClient) ApplySnapshotChunkAsync(params types.RequestApplySnapshot
 	}
 	return cli.finishAsyncCall(req, &types.Response{Value: &types.Response_ApplySnapshotChunk{ApplySnapshotChunk: res}})
 }
-
-// 230724_HJSONG_EXP_START
-func (cli *grpcClient) BeginRecheckTxAsync(params types.RequestBeginRecheckTx) *ReqRes {
-	req := types.ToRequestBeginRecheckTx(params)
-	res, err := cli.client.BeginRecheckTx(context.Background(), req.GetBeginRecheckTx(), grpc.WaitForReady(true))
-	if err != nil {
-		cli.StopForError(err)
-	}
-	return cli.finishAsyncCall(req, &types.Response{Value: &types.Response_BeginRecheckTx{BeginRecheckTx: res}})
-}
-
-func (cli *grpcClient) EndRecheckTxAsync(params types.RequestEndRecheckTx) *ReqRes {
-	req := types.ToRequestEndRecheckTx(params)
-	res, err := cli.client.EndRecheckTx(context.Background(), req.GetEndRecheckTx(), grpc.WaitForReady(true))
-	if err != nil {
-		cli.StopForError(err)
-	}
-	return cli.finishAsyncCall(req, &types.Response{Value: &types.Response_EndRecheckTx{EndRecheckTx: res}})
-} // EXP_END
 
 // finishAsyncCall creates a ReqRes for an async call, and immediately populates it
 // with the response. We don't complete it until it's been ordered via the channel.
@@ -415,6 +414,16 @@ func (cli *grpcClient) EndBlockSync(params types.RequestEndBlock) (*types.Respon
 	return cli.finishSyncCall(reqres).GetEndBlock(), cli.Error()
 }
 
+func (cli *grpcClient) BeginRecheckTxSync(params types.RequestBeginRecheckTx) (*types.ResponseBeginRecheckTx, error) {
+	reqres := cli.BeginRecheckTxAsync(params)
+	return reqres.Response.GetBeginRecheckTx(), cli.Error()
+}
+
+func (cli *grpcClient) EndRecheckTxSync(params types.RequestEndRecheckTx) (*types.ResponseEndRecheckTx, error) {
+	reqres := cli.EndRecheckTxAsync(params)
+	return reqres.Response.GetEndRecheckTx(), cli.Error()
+}
+
 func (cli *grpcClient) ListSnapshotsSync(params types.RequestListSnapshots) (*types.ResponseListSnapshots, error) {
 	reqres := cli.ListSnapshotsAsync(params)
 	return cli.finishSyncCall(reqres).GetListSnapshots(), cli.Error()
@@ -436,14 +445,3 @@ func (cli *grpcClient) ApplySnapshotChunkSync(
 	reqres := cli.ApplySnapshotChunkAsync(params)
 	return cli.finishSyncCall(reqres).GetApplySnapshotChunk(), cli.Error()
 }
-
-// 230724_HJSONG_EXP_START
-func (cli *grpcClient) BeginRecheckTxSync(params types.RequestBeginRecheckTx) (*types.ResponseBeginRecheckTx, error) {
-	reqres := cli.BeginRecheckTxAsync(params)
-	return reqres.Response.GetBeginRecheckTx(), cli.Error()
-}
-
-func (cli *grpcClient) EndRecheckTxSync(params types.RequestEndRecheckTx) (*types.ResponseEndRecheckTx, error) {
-	reqres := cli.EndRecheckTxAsync(params)
-	return reqres.Response.GetEndRecheckTx(), cli.Error()
-} // EXP_END

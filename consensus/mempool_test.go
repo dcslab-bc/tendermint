@@ -216,6 +216,8 @@ func TestMempoolRmBadTx(t *testing.T) {
 type CounterApplication struct {
 	abci.BaseApplication
 
+	// txCount        int
+	// mempoolTxCount int
 	txCount           int
 	mempoolTxCount    int
 	mempoolTxCountMtx sync.Mutex
@@ -254,8 +256,6 @@ func (app *CounterApplication) CheckTx(req abci.RequestCheckTx) abci.ResponseChe
 }
 
 func (app *CounterApplication) BeginRecheckTx(abci.RequestBeginRecheckTx) abci.ResponseBeginRecheckTx {
-	app.mempoolTxCountMtx.Lock()
-	defer app.mempoolTxCountMtx.Unlock()
 	app.mempoolTxCount = app.txCount
 	return abci.ResponseBeginRecheckTx{Code: code.CodeTypeOK}
 }
