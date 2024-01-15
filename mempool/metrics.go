@@ -39,6 +39,9 @@ type Metrics struct {
 
 	// Number of times transactions are rechecked in the mempool.
 	RecheckTimes metrics.Counter
+
+	// Time of recheck transactions in the mempool.
+	RecheckTime metrics.Gauge
 }
 
 // PrometheusMetrics returns Metrics build using Prometheus client library.
@@ -92,6 +95,13 @@ func PrometheusMetrics(namespace string, labelsAndValues ...string) *Metrics {
 			Name:      "recheck_times",
 			Help:      "Number of times transactions are rechecked in the mempool.",
 		}, labels).With(labelsAndValues...),
+
+		RecheckTime: prometheus.NewGaugeFrom(stdprometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "recheck_time",
+			Help:      "Time of recheck transactions in the mempool in ms.",
+		}, labels).With(labelsAndValues...),
 	}
 }
 
@@ -104,5 +114,6 @@ func NopMetrics() *Metrics {
 		RejectedTxs:  discard.NewCounter(),
 		EvictedTxs:   discard.NewCounter(),
 		RecheckTimes: discard.NewCounter(),
+		RecheckTime:  discard.NewGauge(),
 	}
 }

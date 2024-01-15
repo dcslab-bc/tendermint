@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	_ "net/http/pprof" //nolint: gosec // securely exposed on separate, optional port
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
+
 	dbm "github.com/tendermint/tm-db"
 
 	abci "github.com/tendermint/tendermint/abci/types"
@@ -20,10 +23,9 @@ import (
 	bcv1 "github.com/tendermint/tendermint/blockchain/v1"
 	bcv2 "github.com/tendermint/tendermint/blockchain/v2"
 	cfg "github.com/tendermint/tendermint/config"
-	cs "github.com/tendermint/tendermint/consensus"
+	"github.com/tendermint/tendermint/consensus"
 	"github.com/tendermint/tendermint/crypto"
 	"github.com/tendermint/tendermint/evidence"
-
 	tmjson "github.com/tendermint/tendermint/libs/json"
 	"github.com/tendermint/tendermint/libs/log"
 	tmpubsub "github.com/tendermint/tendermint/libs/pubsub"
@@ -43,22 +45,48 @@ import (
 	"github.com/tendermint/tendermint/state/indexer"
 	blockidxkv "github.com/tendermint/tendermint/state/indexer/block/kv"
 	blockidxnull "github.com/tendermint/tendermint/state/indexer/block/null"
-	"github.com/tendermint/tendermint/state/indexer/sink/psql"
 	"github.com/tendermint/tendermint/state/txindex"
 	"github.com/tendermint/tendermint/state/txindex/kv"
 	"github.com/tendermint/tendermint/state/txindex/null"
 	"github.com/tendermint/tendermint/statesync"
 	"github.com/tendermint/tendermint/store"
+	cs "github.com/tendermint/tendermint/test/maverick/consensus"
 	"github.com/tendermint/tendermint/types"
 	tmtime "github.com/tendermint/tendermint/types/time"
 	"github.com/tendermint/tendermint/version"
-
-	_ "net/http/pprof" //nolint: gosec // securely exposed on separate, optional port
-
-	_ "github.com/lib/pq" // provide the psql db driver
 )
 
 //------------------------------------------------------------------------------
+
+// ParseMisbehaviors is a util function that converts a comma separated string into
+// a map of misbehaviors to be executed by the maverick node
+func ParseMisbehaviors(str string) (map[int64]cs.Misbehavior, error) {
+	// check if string is empty in which case we run a normal node
+	misbehaviors := make(map[int64]cs.Misbehavior)
+	if str == "" {
+		return misbehaviors, nil
+	}
+	strs := strings.Split(str, ",")
+	if len(strs)%2 != 0 {
+		return misbehaviors, errors.New("missing either height or misbehavior name in the misbehavior flag")
+	}
+OUTER_LOOP:
+	for i := 0; i < len(strs); i += 2 {
+		height, err := strconv.ParseInt(strs[i+1], 10, 64)
+		if err != nil {
+			return misbehaviors, fmt.Errorf("failed to parse misbehavior height: %w", err)
+		}
+		for key, misbehavior := range cs.MisbehaviorList {
+			if key == strs[i] {
+				misbehaviors[height] = misbehavior
+				continue OUTER_LOOP
+			}
+		}
+		return misbehaviors, fmt.Errorf("received unknown misbehavior: %s. Did you forget to add it?", strs[i])
+	}
+
+	return misbehaviors, nil
+}
 
 // DBContext specifies config information for loading a new DB.
 type DBContext struct {
@@ -97,37 +125,38 @@ type Provider func(*cfg.Config, log.Logger) (*Node, error)
 // DefaultNewNode returns a Tendermint node with default settings for the
 // PrivValidator, ClientCreator, GenesisDoc, and DBProvider.
 // It implements NodeProvider.
-func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
+func DefaultNewNode(config *cfg.Config, logger log.Logger, misbehaviors map[int64]cs.Misbehavior) (*Node, error) {
 	nodeKey, err := p2p.LoadOrGenNodeKey(config.NodeKeyFile())
 	if err != nil {
-		return nil, fmt.Errorf("failed to load or gen node key %s: %w", config.NodeKeyFile(), err)
+		return nil, fmt.Errorf("failed to load or gen node key %s, err: %w", config.NodeKeyFile(), err)
 	}
 
 	return NewNode(config,
-		privval.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile()),
+		LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile()),
 		nodeKey,
 		proxy.DefaultClientCreator(config.ProxyApp, config.ABCI, config.DBDir()),
 		DefaultGenesisDocProviderFunc(config),
 		DefaultDBProvider,
 		DefaultMetricsProvider(config.Instrumentation),
 		logger,
+		misbehaviors,
 	)
 }
 
 // MetricsProvider returns a consensus, p2p and mempool Metrics.
-type MetricsProvider func(chainID string) (*cs.Metrics, *p2p.Metrics, *mempl.Metrics, *sm.Metrics)
+type MetricsProvider func(chainID string) (*consensus.Metrics, *p2p.Metrics, *mempl.Metrics, *sm.Metrics)
 
 // DefaultMetricsProvider returns Metrics build using Prometheus client library
 // if Prometheus is enabled. Otherwise, it returns no-op Metrics.
 func DefaultMetricsProvider(config *cfg.InstrumentationConfig) MetricsProvider {
-	return func(chainID string) (*cs.Metrics, *p2p.Metrics, *mempl.Metrics, *sm.Metrics) {
+	return func(chainID string) (*consensus.Metrics, *p2p.Metrics, *mempl.Metrics, *sm.Metrics) {
 		if config.Prometheus {
-			return cs.PrometheusMetrics(config.Namespace, "chain_id", chainID),
+			return consensus.PrometheusMetrics(config.Namespace, "chain_id", chainID),
 				p2p.PrometheusMetrics(config.Namespace, "chain_id", chainID),
 				mempl.PrometheusMetrics(config.Namespace, "chain_id", chainID),
 				sm.PrometheusMetrics(config.Namespace, "chain_id", chainID)
 		}
-		return cs.NopMetrics(), p2p.NopMetrics(), mempl.NopMetrics(), sm.NopMetrics()
+		return consensus.NopMetrics(), p2p.NopMetrics(), mempl.NopMetrics(), sm.NopMetrics()
 	}
 }
 
@@ -161,21 +190,19 @@ func CustomReactors(reactors map[string]p2p.Reactor) Option {
 				n.sw.RemoveReactor(name, existingReactor)
 			}
 			n.sw.AddReactor(name, reactor)
-			// register the new channels to the nodeInfo
-			// NOTE: This is a bit messy now with the type casting but is
-			// cleaned up in the following version when NodeInfo is changed from
-			// and interface to a concrete type
-			if ni, ok := n.nodeInfo.(p2p.DefaultNodeInfo); ok {
-				for _, chDesc := range reactor.GetChannels() {
-					if !ni.HasChannel(chDesc.ID) {
-						ni.Channels = append(ni.Channels, chDesc.ID)
-						n.transport.AddChannel(chDesc.ID)
-					}
-				}
-				n.nodeInfo = ni
-			} else {
-				n.Logger.Error("Node info is not of type DefaultNodeInfo. Custom reactor channels can not be added.")
+		}
+	}
+}
+
+func CustomReactorsAsConstructors(reactors map[string]func(n *Node) p2p.Reactor) Option {
+	return func(n *Node) {
+		for name, customReactor := range reactors {
+			if existingReactor := n.sw.Reactor(name); existingReactor != nil {
+				n.sw.Logger.Info("Replacing existing reactor with a custom one",
+					"name", name)
+				n.sw.RemoveReactor(name, existingReactor)
 			}
+			n.sw.AddReactor(name, customReactor(n))
 		}
 	}
 }
@@ -268,7 +295,6 @@ func createAndStartEventBus(logger log.Logger) (*types.EventBus, error) {
 
 func createAndStartIndexerService(
 	config *cfg.Config,
-	chainID string,
 	dbProvider DBProvider,
 	eventBus *types.EventBus,
 	logger log.Logger,
@@ -287,18 +313,6 @@ func createAndStartIndexerService(
 
 		txIndexer = kv.NewTxIndex(store)
 		blockIndexer = blockidxkv.New(dbm.NewPrefixDB(store, []byte("block_events")))
-
-	case "psql":
-		if config.TxIndex.PsqlConn == "" {
-			return nil, nil, nil, errors.New(`no psql-conn is set for the "psql" indexer`)
-		}
-		es, err := psql.NewEventSink(config.TxIndex.PsqlConn, chainID)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("creating psql indexer: %w", err)
-		}
-		txIndexer = es.TxIndexer()
-		blockIndexer = es.BlockIndexer()
-
 	default:
 		txIndexer = &null.TxIndex{}
 		blockIndexer = &blockidxnull.BlockerIndexer{}
@@ -335,7 +349,7 @@ func doHandshake(
 func logNodeStartupInfo(state sm.State, pubKey crypto.PubKey, logger, consensusLogger log.Logger) {
 	// Log the version info.
 	logger.Info("Version info",
-		"tendermint_version", version.TMCoreSemVer,
+		"software", version.TMCoreSemVer,
 		"block", version.BlockProtocol,
 		"p2p", version.P2PProtocol,
 	)
@@ -365,38 +379,13 @@ func onlyValidatorIsUs(state sm.State, pubKey crypto.PubKey) bool {
 	return bytes.Equal(pubKey.Address(), addr)
 }
 
-func createMempoolAndMempoolReactor(
-	config *cfg.Config,
-	proxyApp proxy.AppConns,
-	state sm.State,
-	memplMetrics *mempl.Metrics,
-	logger log.Logger,
-) (mempl.Mempool, p2p.Reactor) {
+func createMempoolAndMempoolReactor(config *cfg.Config, proxyApp proxy.AppConns,
+	state sm.State, memplMetrics *mempl.Metrics, logger log.Logger,
+) (p2p.Reactor, mempl.Mempool) {
 	switch config.Mempool.Version {
-	/*
-		case cfg.MempoolV1:
-			mp := mempoolv1.NewTxMempool(
-				logger,
-				config.Mempool,
-				proxyApp.Mempool(),
-				state.LastBlockHeight,
-				mempoolv1.WithMetrics(memplMetrics),
-				mempoolv1.WithPreCheck(sm.TxPreCheck(state)),
-				mempoolv1.WithPostCheck(sm.TxPostCheck(state)),
-			)
-
-			reactor := mempoolv1.NewReactor(
-				config.Mempool,
-				mp,
-			)
-			if config.Consensus.WaitForTxs() {
-				mp.EnableTxsAvailable()
-			}
-
-			return mp, reactor
-	*/
 	case cfg.MempoolV1:
-		mp := mempoolv1.NewCListMempool(
+		mp := mempoolv1.NewTxMempool(
+			logger,
 			config.Mempool,
 			proxyApp.Mempool(),
 			state.LastBlockHeight,
@@ -404,8 +393,6 @@ func createMempoolAndMempoolReactor(
 			mempoolv1.WithPreCheck(sm.TxPreCheck(state)),
 			mempoolv1.WithPostCheck(sm.TxPostCheck(state)),
 		)
-
-		mp.SetLogger(logger)
 
 		reactor := mempoolv1.NewReactor(
 			config.Mempool,
@@ -415,7 +402,8 @@ func createMempoolAndMempoolReactor(
 			mp.EnableTxsAvailable()
 		}
 
-		return mp, reactor
+		return reactor, mp
+
 	case cfg.MempoolV0:
 		mp := mempoolv0.NewCListMempool(
 			config.Mempool,
@@ -427,6 +415,7 @@ func createMempoolAndMempoolReactor(
 		)
 
 		mp.SetLogger(logger)
+		mp.SetLogger(logger)
 
 		reactor := mempoolv0.NewReactor(
 			config.Mempool,
@@ -436,7 +425,7 @@ func createMempoolAndMempoolReactor(
 			mp.EnableTxsAvailable()
 		}
 
-		return mp, reactor
+		return reactor, mp
 
 	default:
 		return nil, nil
@@ -450,10 +439,11 @@ func createEvidenceReactor(config *cfg.Config, dbProvider DBProvider,
 	if err != nil {
 		return nil, nil, err
 	}
-	evidenceLogger := logger.With("module", "evidence")
-	evidencePool, err := evidence.NewPool(evidenceDB, sm.NewStore(stateDB, sm.StoreOptions{
+	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: config.Storage.DiscardABCIResponses,
-	}), blockStore)
+	})
+	evidenceLogger := logger.With("module", "evidence")
+	evidencePool, err := evidence.NewPool(evidenceDB, stateStore, blockStore)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -491,10 +481,11 @@ func createConsensusReactor(config *cfg.Config,
 	mempool mempl.Mempool,
 	evidencePool *evidence.Pool,
 	privValidator types.PrivValidator,
-	csMetrics *cs.Metrics,
+	csMetrics *consensus.Metrics,
 	waitSync bool,
 	eventBus *types.EventBus,
 	consensusLogger log.Logger,
+	misbehaviors map[int64]cs.Misbehavior,
 ) (*cs.Reactor, *cs.State) {
 	consensusState := cs.NewState(
 		config.Consensus,
@@ -503,6 +494,7 @@ func createConsensusReactor(config *cfg.Config,
 		blockStore,
 		mempool,
 		evidencePool,
+		misbehaviors,
 		cs.StateMetrics(csMetrics),
 	)
 	consensusState.SetLogger(consensusLogger)
@@ -733,6 +725,7 @@ func NewNode(config *cfg.Config,
 	dbProvider DBProvider,
 	metricsProvider MetricsProvider,
 	logger log.Logger,
+	misbehaviors map[int64]cs.Misbehavior,
 	options ...Option,
 ) (*Node, error) {
 	blockStore, stateDB, err := initDBs(config, dbProvider)
@@ -741,7 +734,7 @@ func NewNode(config *cfg.Config,
 	}
 
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
-		DiscardABCIResponses: config.Storage.DiscardABCIResponses,
+		DiscardABCIResponses: false,
 	})
 
 	state, genDoc, err := LoadStateFromDBOrGenesisDocProvider(stateDB, genesisDocProvider)
@@ -764,8 +757,7 @@ func NewNode(config *cfg.Config,
 		return nil, err
 	}
 
-	indexerService, txIndexer, blockIndexer, err := createAndStartIndexerService(config,
-		genDoc.ChainID, dbProvider, eventBus, logger)
+	indexerService, txIndexer, blockIndexer, err := createAndStartIndexerService(config, dbProvider, eventBus, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -785,7 +777,9 @@ func NewNode(config *cfg.Config,
 		return nil, fmt.Errorf("can't get pubkey: %w", err)
 	}
 
-	// Determine whether we should attempt state sync.
+	// Determine whether we should do state and/or fast sync.
+	// We don't fast-sync when the only validator is us.
+	fastSync := config.FastSyncMode && !onlyValidatorIsUs(state, pubKey)
 	stateSync := config.StateSync.Enable && !onlyValidatorIsUs(state, pubKey)
 	if stateSync && state.LastBlockHeight > 0 {
 		logger.Info("Found local state with non-zero height, skipping state sync")
@@ -809,16 +803,12 @@ func NewNode(config *cfg.Config,
 		}
 	}
 
-	// Determine whether we should do fast sync. This must happen after the handshake, since the
-	// app may modify the validator set, specifying ourself as the only validator.
-	fastSync := config.FastSyncMode && !onlyValidatorIsUs(state, pubKey)
-
 	logNodeStartupInfo(state, pubKey, logger, consensusLogger)
 
 	csMetrics, p2pMetrics, memplMetrics, smMetrics := metricsProvider(genDoc.ChainID)
 
 	// Make MempoolReactor
-	mempool, mempoolReactor := createMempoolAndMempoolReactor(config, proxyApp, state, memplMetrics, logger)
+	mempoolReactor, mempool := createMempoolAndMempoolReactor(config, proxyApp, state, memplMetrics, logger)
 
 	// Make Evidence Reactor
 	evidenceReactor, evidencePool, err := createEvidenceReactor(config, dbProvider, stateDB, blockStore, logger)
@@ -849,10 +839,11 @@ func NewNode(config *cfg.Config,
 	} else if fastSync {
 		csMetrics.FastSyncing.Set(1)
 	}
+
+	logger.Info("Setting up maverick consensus reactor", "Misbehaviors", misbehaviors)
 	consensusReactor, consensusState := createConsensusReactor(
 		config, state, blockExec, blockStore, mempool, evidencePool,
-		privValidator, csMetrics, stateSync || fastSync, eventBus, consensusLogger,
-	)
+		privValidator, csMetrics, stateSync || fastSync, eventBus, consensusLogger, misbehaviors)
 
 	// Set up state sync reactor, and schedule a sync if requested.
 	// FIXME The way we do phased startups (e.g. replay -> fast sync -> consensus) is very messy,
@@ -1070,16 +1061,6 @@ func (n *Node) OnStop() {
 			n.Logger.Error("Prometheus HTTP server Shutdown", "err", err)
 		}
 	}
-	if n.blockStore != nil {
-		if err := n.blockStore.Close(); err != nil {
-			n.Logger.Error("problem closing blockstore", "err", err)
-		}
-	}
-	if n.stateStore != nil {
-		if err := n.stateStore.Close(); err != nil {
-			n.Logger.Error("problem closing statestore", "err", err)
-		}
-	}
 }
 
 // ConfigureRPC makes sure RPC has all the objects it needs to operate.
@@ -1103,7 +1084,7 @@ func (n *Node) ConfigureRPC() error {
 		GenDoc:           n.genesisDoc,
 		TxIndexer:        n.txIndexer,
 		BlockIndexer:     n.blockIndexer,
-		ConsensusReactor: n.consensusReactor,
+		ConsensusReactor: &consensus.Reactor{},
 		EventBus:         n.eventBus,
 		Mempool:          n.mempool,
 
@@ -1111,10 +1092,6 @@ func (n *Node) ConfigureRPC() error {
 
 		Config: *n.config.RPC,
 	})
-	if err := rpccore.InitGenesisChunks(); err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -1155,7 +1132,6 @@ func (n *Node) startRPC() ([]net.Listener, error) {
 				}
 			}),
 			rpcserver.ReadLimit(config.MaxBodyBytes),
-			rpcserver.WriteChanCapacity(n.config.RPC.WebSocketWriteBufferSize),
 		)
 		wm.SetLogger(wmLogger)
 		mux.HandleFunc("/websocket", wm.WebsocketHandler)
@@ -1230,7 +1206,6 @@ func (n *Node) startRPC() ([]net.Listener, error) {
 			}
 		}()
 		listeners = append(listeners, listener)
-
 	}
 
 	return listeners, nil
@@ -1347,7 +1322,7 @@ func makeNodeInfo(
 	txIndexer txindex.TxIndexer,
 	genDoc *types.GenesisDoc,
 	state sm.State,
-) (p2p.DefaultNodeInfo, error) {
+) (p2p.NodeInfo, error) {
 	txIndexerStatus := "on"
 	if _, ok := txIndexer.(*null.TxIndex); ok {
 		txIndexerStatus = "off"
@@ -1362,7 +1337,7 @@ func makeNodeInfo(
 	case "v2":
 		bcChannel = bcv2.BlockchainChannel
 	default:
-		return p2p.DefaultNodeInfo{}, fmt.Errorf("unknown fastsync version %s", config.FastSync.Version)
+		return nil, fmt.Errorf("unknown fastsync version %s", config.FastSync.Version)
 	}
 
 	nodeInfo := p2p.DefaultNodeInfo{
@@ -1409,8 +1384,9 @@ func makeNodeInfo(
 var genesisDocKey = []byte("genesisDoc")
 
 // LoadStateFromDBOrGenesisDocProvider attempts to load the state from the
-// database, or creates one using the given genesisDocProvider. On success this also
-// returns the genesis doc loaded through the given provider.
+// database, or creates one using the given genesisDocProvider and persists the
+// result to the database. On success this also returns the genesis doc loaded
+// through the given provider.
 func LoadStateFromDBOrGenesisDocProvider(
 	stateDB dbm.DB,
 	genesisDocProvider GenesisDocProvider,
@@ -1424,9 +1400,7 @@ func LoadStateFromDBOrGenesisDocProvider(
 		}
 		// save genesis doc to prevent a certain class of user errors (e.g. when it
 		// was changed, accidentally or not). Also good for audit trail.
-		if err := saveGenesisDoc(stateDB, genDoc); err != nil {
-			return sm.State{}, nil, err
-		}
+		saveGenesisDoc(stateDB, genDoc)
 	}
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: false,
@@ -1456,16 +1430,14 @@ func loadGenesisDoc(db dbm.DB) (*types.GenesisDoc, error) {
 }
 
 // panics if failed to marshal the given genesis document
-func saveGenesisDoc(db dbm.DB, genDoc *types.GenesisDoc) error {
+func saveGenesisDoc(db dbm.DB, genDoc *types.GenesisDoc) {
 	b, err := tmjson.Marshal(genDoc)
 	if err != nil {
-		return fmt.Errorf("failed to save genesis doc due to marshaling error: %w", err)
+		panic(fmt.Sprintf("Failed to save genesis doc due to marshaling error: %v", err))
 	}
 	if err := db.SetSync(genesisDocKey, b); err != nil {
-		return err
+		panic(fmt.Sprintf("Failed to save genesis doc: %v", err))
 	}
-
-	return nil
 }
 
 func createAndStartPrivValidatorSocketClient(

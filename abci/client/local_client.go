@@ -15,6 +15,8 @@ var _ Client = (*localClient)(nil)
 type localClient struct {
 	service.BaseService
 
+	// TODO: remove `mtx` to increase concurrency.
+	// CONTRACT: The application should protect itself from concurrency as an abci server.
 	mtx *tmsync.Mutex
 	types.Application
 	Callback
@@ -98,8 +100,8 @@ func (app *localClient) DeliverTxAsync(params types.RequestDeliverTx) *ReqRes {
 }
 
 func (app *localClient) CheckTxAsync(req types.RequestCheckTx) *ReqRes {
-	app.mtx.Lock()
-	defer app.mtx.Unlock()
+	// app.mtx.Lock()
+	// defer app.mtx.Unlock()
 
 	res := app.Application.CheckTx(req)
 	return app.callback(
@@ -160,6 +162,28 @@ func (app *localClient) EndBlockAsync(req types.RequestEndBlock) *ReqRes {
 	return app.callback(
 		types.ToRequestEndBlock(req),
 		types.ToResponseEndBlock(res),
+	)
+}
+
+func (app *localClient) BeginRecheckTxAsync(req types.RequestBeginRecheckTx) *ReqRes {
+	// app.mtx.Lock()
+	// defer app.mtx.Unlock()
+
+	res := app.Application.BeginRecheckTx(req)
+	return app.callback(
+		types.ToRequestBeginRecheckTx(req),
+		types.ToResponseBeginRecheckTx(res),
+	)
+}
+
+func (app *localClient) EndRecheckTxAsync(req types.RequestEndRecheckTx) *ReqRes {
+	// app.mtx.Lock()
+	// defer app.mtx.Unlock()
+
+	res := app.Application.EndRecheckTx(req)
+	return app.callback(
+		types.ToRequestEndRecheckTx(req),
+		types.ToResponseEndRecheckTx(res),
 	)
 }
 
@@ -242,8 +266,8 @@ func (app *localClient) DeliverTxSync(req types.RequestDeliverTx) (*types.Respon
 }
 
 func (app *localClient) CheckTxSync(req types.RequestCheckTx) (*types.ResponseCheckTx, error) {
-	app.mtx.Lock()
-	defer app.mtx.Unlock()
+	// app.mtx.Lock()
+	// defer app.mtx.Unlock()
 
 	res := app.Application.CheckTx(req)
 	return &res, nil
@@ -286,6 +310,22 @@ func (app *localClient) EndBlockSync(req types.RequestEndBlock) (*types.Response
 	defer app.mtx.Unlock()
 
 	res := app.Application.EndBlock(req)
+	return &res, nil
+}
+
+func (app *localClient) BeginRecheckTxSync(req types.RequestBeginRecheckTx) (*types.ResponseBeginRecheckTx, error) {
+	app.mtx.Lock()
+	defer app.mtx.Unlock()
+
+	res := app.Application.BeginRecheckTx(req)
+	return &res, nil
+}
+
+func (app *localClient) EndRecheckTxSync(req types.RequestEndRecheckTx) (*types.ResponseEndRecheckTx, error) {
+	app.mtx.Lock()
+	defer app.mtx.Unlock()
+
+	res := app.Application.EndRecheckTx(req)
 	return &res, nil
 }
 
