@@ -323,13 +323,8 @@ func execBlockOnProxyApp(
 
 	//mssong
 	for _, tx := range block.Txs {
-		// wg.Add(1)
 		AnteWg.Add(1)
 		proxyAppConn.AnteVerifyTxAsync(abci.RequestAnteVerifyTx{Tx: tx}) //verify
-		// go func() {
-		// 	defer wg.Done()
-		// 	proxyAppConn.AnteVerifyTxAsync(abci.RequestAnteVerifyTx{Tx: tx}) //verify
-		// }()
 		if err := proxyAppConn.Error(); err != nil {
 			return nil, err
 		}

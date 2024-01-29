@@ -1595,7 +1595,7 @@ func (cs *State) finalizeCommit(height int64) {
 	}
 
 	logger.Info(
-		"finalizing commit of block",
+		"finalizing commit of block_mssong",
 		"hash", log.NewLazyBlockHash(block),
 		"root", block.AppHash,
 		"num_txs", len(block.Txs),
