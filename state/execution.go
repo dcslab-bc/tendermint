@@ -3,6 +3,7 @@ package state
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	abci "github.com/tendermint/tendermint/abci/types"
@@ -41,6 +42,9 @@ type BlockExecutor struct {
 
 	metrics *Metrics
 }
+
+// updated by mssong
+var AnteWg = sync.WaitGroup{}
 
 type BlockExecutorOption func(executor *BlockExecutor)
 
@@ -237,6 +241,7 @@ func (blockExec *BlockExecutor) Commit(
 		"height", block.Height,
 		"num_txs", len(block.Txs),
 		"app_hash", fmt.Sprintf("%X", res.Data),
+		"timestamp:", time.Now().Format("15:04:05.000"),
 	)
 
 	// Update mempool.
@@ -316,6 +321,21 @@ func execBlockOnProxyApp(
 		return nil, err
 	}
 
+	//mssong
+	for _, tx := range block.Txs {
+		// wg.Add(1)
+		AnteWg.Add(1)
+		proxyAppConn.AnteVerifyTxAsync(abci.RequestAnteVerifyTx{Tx: tx}) //verify
+		// go func() {
+		// 	defer wg.Done()
+		// 	proxyAppConn.AnteVerifyTxAsync(abci.RequestAnteVerifyTx{Tx: tx}) //verify
+		// }()
+		if err := proxyAppConn.Error(); err != nil {
+			return nil, err
+		}
+	}
+	AnteWg.Wait()
+
 	// run txs of block
 	for _, tx := range block.Txs {
 		proxyAppConn.DeliverTxAsync(abci.RequestDeliverTx{Tx: tx})
@@ -331,7 +351,7 @@ func execBlockOnProxyApp(
 		return nil, err
 	}
 
-	logger.Info("executed block", "height", block.Height, "num_valid_txs", validTxs, "num_invalid_txs", invalidTxs)
+	logger.Info("executed block", "height", block.Height, "num_valid_txs", validTxs, "num_invalid_txs", invalidTxs, "timestamp:", time.Now().Format("15:04:05.000"))
 	return abciResponses, nil
 }
 
