@@ -237,7 +237,7 @@ func (blockExec *BlockExecutor) Commit(
 
 	// ResponseCommit has no error code - just data
 	blockExec.logger.Info(
-		"committed state",
+		"committed state (SNU)",
 		"height", block.Height,
 		"num_txs", len(block.Txs),
 		"app_hash", fmt.Sprintf("%X", res.Data),
