@@ -5,7 +5,8 @@ import (
 	"github.com/tendermint/tendermint/abci/types"
 )
 
-//go:generate ../scripts/mockery_generate.sh AppConnConsensus|AppConnMempool|AppConnQuery|AppConnSnapshot
+//nolint
+//go:generate mockery --case underscore --name AppConnConsensus|AppConnMempool|AppConnQuery|AppConnSnapshot|ClientCreator
 
 //----------------------------------------------------------------------------------------
 // Enforce which abci msgs can be sent on a connection at the type level
@@ -20,6 +21,8 @@ type AppConnConsensus interface {
 	DeliverTxAsync(types.RequestDeliverTx) *abcicli.ReqRes
 	EndBlockSync(types.RequestEndBlock) (*types.ResponseEndBlock, error)
 	CommitSync() (*types.ResponseCommit, error)
+
+	AnteVerifyTxAsync(types.RequestAnteVerifyTx) *abcicli.ReqRes
 }
 
 type AppConnMempool interface {
@@ -88,6 +91,10 @@ func (app *appConnConsensus) BeginBlockSync(req types.RequestBeginBlock) (*types
 
 func (app *appConnConsensus) DeliverTxAsync(req types.RequestDeliverTx) *abcicli.ReqRes {
 	return app.appConn.DeliverTxAsync(req)
+}
+
+func (app *appConnConsensus) AnteVerifyTxAsync(req types.RequestAnteVerifyTx) *abcicli.ReqRes {
+	return app.appConn.AnteVerifyTxAsync(req)
 }
 
 func (app *appConnConsensus) EndBlockSync(req types.RequestEndBlock) (*types.ResponseEndBlock, error) {
