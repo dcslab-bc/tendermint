@@ -18,25 +18,28 @@ func RPCRoutes(c *lrpc.Client) map[string]*rpcserver.RPCFunc {
 		"unsubscribe_all": rpcserver.NewWSRPCFunc(c.UnsubscribeAllWS, ""),
 
 		// info API
-		"health":               rpcserver.NewRPCFunc(makeHealthFunc(c), ""),
-		"status":               rpcserver.NewRPCFunc(makeStatusFunc(c), ""),
-		"net_info":             rpcserver.NewRPCFunc(makeNetInfoFunc(c), ""),
-		"blockchain":           rpcserver.NewRPCFunc(makeBlockchainInfoFunc(c), "minHeight,maxHeight", rpcserver.Cacheable()),
-		"genesis":              rpcserver.NewRPCFunc(makeGenesisFunc(c), "", rpcserver.Cacheable()),
-		"genesis_chunked":      rpcserver.NewRPCFunc(makeGenesisChunkedFunc(c), "", rpcserver.Cacheable()),
-		"block":                rpcserver.NewRPCFunc(makeBlockFunc(c), "height", rpcserver.Cacheable("height")),
-		"block_by_hash":        rpcserver.NewRPCFunc(makeBlockByHashFunc(c), "hash", rpcserver.Cacheable()),
-		"block_results":        rpcserver.NewRPCFunc(makeBlockResultsFunc(c), "height", rpcserver.Cacheable("height")),
-		"commit":               rpcserver.NewRPCFunc(makeCommitFunc(c), "height", rpcserver.Cacheable("height")),
-		"tx":                   rpcserver.NewRPCFunc(makeTxFunc(c), "hash,prove", rpcserver.Cacheable()),
-		"tx_search":            rpcserver.NewRPCFunc(makeTxSearchFunc(c), "query,prove,page,per_page,order_by"),
-		"block_search":         rpcserver.NewRPCFunc(makeBlockSearchFunc(c), "query,page,per_page,order_by"),
-		"validators":           rpcserver.NewRPCFunc(makeValidatorsFunc(c), "height,page,per_page", rpcserver.Cacheable("height")),
-		"dump_consensus_state": rpcserver.NewRPCFunc(makeDumpConsensusStateFunc(c), ""),
-		"consensus_state":      rpcserver.NewRPCFunc(makeConsensusStateFunc(c), ""),
-		"consensus_params":     rpcserver.NewRPCFunc(makeConsensusParamsFunc(c), "height", rpcserver.Cacheable("height")),
-		"unconfirmed_txs":      rpcserver.NewRPCFunc(makeUnconfirmedTxsFunc(c), "limit"),
-		"num_unconfirmed_txs":  rpcserver.NewRPCFunc(makeNumUnconfirmedTxsFunc(c), ""),
+		"health":                    rpcserver.NewRPCFunc(makeHealthFunc(c), ""),
+		"status":                    rpcserver.NewRPCFunc(makeStatusFunc(c), ""),
+		"net_info":                  rpcserver.NewRPCFunc(makeNetInfoFunc(c), ""),
+		"blockchain":                rpcserver.NewRPCFunc(makeBlockchainInfoFunc(c), "minHeight,maxHeight", rpcserver.Cacheable()),
+		"genesis":                   rpcserver.NewRPCFunc(makeGenesisFunc(c), "", rpcserver.Cacheable()),
+		"genesis_chunked":           rpcserver.NewRPCFunc(makeGenesisChunkedFunc(c), "", rpcserver.Cacheable()),
+		"block":                     rpcserver.NewRPCFunc(makeBlockFunc(c), "height", rpcserver.Cacheable("height")),
+		"signed_block":              rpcserver.NewRPCFunc(makeSignedBlockFunc(c), "height", rpcserver.Cacheable("height")),
+		"block_by_hash":             rpcserver.NewRPCFunc(makeBlockByHashFunc(c), "hash", rpcserver.Cacheable()),
+		"block_results":             rpcserver.NewRPCFunc(makeBlockResultsFunc(c), "height", rpcserver.Cacheable("height")),
+		"commit":                    rpcserver.NewRPCFunc(makeCommitFunc(c), "height", rpcserver.Cacheable("height")),
+		"data_commitment":           rpcserver.NewRPCFunc(makeDataCommitmentFunc(c), "firstBlock,lastBlock"),
+		"data_root_inclusion_proof": rpcserver.NewRPCFunc(makeDataRootInclusionProofFunc(c), "height,firstBlock,lastBlock"),
+		"tx":                        rpcserver.NewRPCFunc(makeTxFunc(c), "hash,prove", rpcserver.Cacheable()),
+		"tx_search":                 rpcserver.NewRPCFunc(makeTxSearchFunc(c), "query,prove,page,per_page,order_by"),
+		"block_search":              rpcserver.NewRPCFunc(makeBlockSearchFunc(c), "query,page,per_page,order_by"),
+		"validators":                rpcserver.NewRPCFunc(makeValidatorsFunc(c), "height,page,per_page", rpcserver.Cacheable("height")),
+		"dump_consensus_state":      rpcserver.NewRPCFunc(makeDumpConsensusStateFunc(c), ""),
+		"consensus_state":           rpcserver.NewRPCFunc(makeConsensusStateFunc(c), ""),
+		"consensus_params":          rpcserver.NewRPCFunc(makeConsensusParamsFunc(c), "height", rpcserver.Cacheable("height")),
+		"unconfirmed_txs":           rpcserver.NewRPCFunc(makeUnconfirmedTxsFunc(c), "limit"),
+		"num_unconfirmed_txs":       rpcserver.NewRPCFunc(makeNumUnconfirmedTxsFunc(c), ""),
 
 		// tx broadcast API
 		"broadcast_tx_commit": rpcserver.NewRPCFunc(makeBroadcastTxCommitFunc(c), "tx"),
@@ -109,6 +112,14 @@ func makeBlockFunc(c *lrpc.Client) rpcBlockFunc {
 	}
 }
 
+type rpcSignedBlockFunc func(ctx *rpctypes.Context, height *int64) (*ctypes.ResultSignedBlock, error)
+
+func makeSignedBlockFunc(c *lrpc.Client) rpcSignedBlockFunc {
+	return func(ctx *rpctypes.Context, height *int64) (*ctypes.ResultSignedBlock, error) {
+		return c.SignedBlock(ctx.Context(), height)
+	}
+}
+
 type rpcBlockByHashFunc func(ctx *rpctypes.Context, hash []byte) (*ctypes.ResultBlock, error)
 
 func makeBlockByHashFunc(c *lrpc.Client) rpcBlockByHashFunc {
@@ -130,6 +141,40 @@ type rpcCommitFunc func(ctx *rpctypes.Context, height *int64) (*ctypes.ResultCom
 func makeCommitFunc(c *lrpc.Client) rpcCommitFunc {
 	return func(ctx *rpctypes.Context, height *int64) (*ctypes.ResultCommit, error) {
 		return c.Commit(ctx.Context(), height)
+	}
+}
+
+type rpcDataCommitmentFunc func(
+	ctx *rpctypes.Context,
+	firstBlock uint64,
+	lastBlock uint64,
+) (*ctypes.ResultDataCommitment, error)
+
+type rpcDataRootInclusionProofFunc func(
+	ctx *rpctypes.Context,
+	height uint64,
+	firstBlock uint64,
+	lastBlock uint64,
+) (*ctypes.ResultDataRootInclusionProof, error)
+
+func makeDataCommitmentFunc(c *lrpc.Client) rpcDataCommitmentFunc {
+	return func(
+		ctx *rpctypes.Context,
+		firstBlock uint64,
+		lastBlock uint64,
+	) (*ctypes.ResultDataCommitment, error) {
+		return c.DataCommitment(ctx.Context(), firstBlock, lastBlock)
+	}
+}
+
+func makeDataRootInclusionProofFunc(c *lrpc.Client) rpcDataRootInclusionProofFunc {
+	return func(
+		ctx *rpctypes.Context,
+		height uint64,
+		firstBlock uint64,
+		lastBlock uint64,
+	) (*ctypes.ResultDataRootInclusionProof, error) {
+		return c.DataRootInclusionProof(ctx.Context(), height, firstBlock, lastBlock)
 	}
 }
 

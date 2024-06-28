@@ -482,12 +482,6 @@ func TestTx(t *testing.T) {
 				assert.Zero(t, ptx.Index)
 				assert.True(t, ptx.TxResult.IsOK())
 				assert.EqualValues(t, txHash, ptx.Hash)
-
-				// time to verify the proof
-				proof := ptx.Proof
-				if tc.prove && assert.EqualValues(t, tx, proof.Data) {
-					assert.NoError(t, proof.Proof.Verify(proof.RootHash, txHash))
-				}
 			}
 		}
 	}
@@ -542,11 +536,6 @@ func TestTxSearch(t *testing.T) {
 		assert.Zero(t, ptx.Index)
 		assert.True(t, ptx.TxResult.IsOK())
 		assert.EqualValues(t, find.Hash, ptx.Hash)
-
-		// time to verify the proof
-		if assert.EqualValues(t, find.Tx, ptx.Proof.Data) {
-			assert.NoError(t, ptx.Proof.Proof.Verify(ptx.Proof.RootHash, find.Hash))
-		}
 
 		// query by height
 		result, err = c.TxSearch(context.Background(), fmt.Sprintf("tx.height=%d", find.Height), true, nil, nil, "asc")
@@ -628,6 +617,30 @@ func TestTxSearch(t *testing.T) {
 		}
 		require.Len(t, seen, txCount)
 	}
+}
+
+func TestDataCommitment(t *testing.T) {
+	c := getHTTPClient()
+
+	// first we broadcast a few tx
+	expectedHeight := int64(3)
+	var bres *ctypes.ResultBroadcastTxCommit
+	var err error
+	for i := int64(0); i < expectedHeight; i++ {
+		_, _, tx := MakeTxKV()
+		bres, err = c.BroadcastTxCommit(context.Background(), tx)
+		require.Nil(t, err, "%+v when submitting tx %d", err, i)
+	}
+
+	// check if height >= 3
+	actualHeight := bres.Height
+	require.LessOrEqual(t, expectedHeight, actualHeight, "couldn't create enough blocks for testing the commitment.")
+
+	// check if data commitment is not nil.
+	// Checking if the commitment is correct is done in `core/blocks_test.go`.
+	dataCommitment, err := c.DataCommitment(ctx, 1, uint64(expectedHeight))
+	require.NotNil(t, dataCommitment, "data commitment shouldn't be nul.")
+	require.Nil(t, err, "%+v when creating data commitment.", err)
 }
 
 func TestBatchedJSONRPCCalls(t *testing.T) {

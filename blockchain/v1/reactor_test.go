@@ -23,6 +23,7 @@ import (
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/proxy"
 	sm "github.com/tendermint/tendermint/state"
+	"github.com/tendermint/tendermint/state/test/factory"
 	"github.com/tendermint/tendermint/store"
 	"github.com/tendermint/tendermint/types"
 	tmtime "github.com/tendermint/tendermint/types/time"
@@ -144,7 +145,7 @@ func newBlockchainReactor(
 		thisParts := thisBlock.MakePartSet(types.BlockPartSizeBytes)
 		blockID := types.BlockID{Hash: thisBlock.Hash(), PartSetHeader: thisParts.Header()}
 
-		state, _, err = blockExec.ApplyBlock(state, blockID, thisBlock)
+		state, _, err = blockExec.ApplyBlock(state, blockID, thisBlock, lastCommit)
 		if err != nil {
 			panic(fmt.Errorf("error apply block: %w", err))
 		}
@@ -381,7 +382,13 @@ func makeTxs(height int64) (txs []types.Tx) {
 }
 
 func makeBlock(height int64, state sm.State, lastCommit *types.Commit) *types.Block {
-	block, _ := state.MakeBlock(height, makeTxs(height), lastCommit, nil, state.Validators.GetProposer().Address)
+	block, _ := state.MakeBlock(
+		height,
+		factory.MakeData(makeTxs(height), nil),
+		lastCommit,
+		nil,
+		state.Validators.GetProposer().Address,
+	)
 	return block
 }
 

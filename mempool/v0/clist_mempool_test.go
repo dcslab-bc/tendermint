@@ -25,6 +25,7 @@ import (
 	tmrand "github.com/tendermint/tendermint/libs/rand"
 	"github.com/tendermint/tendermint/libs/service"
 	"github.com/tendermint/tendermint/mempool"
+	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/proxy"
 	"github.com/tendermint/tendermint/types"
 )
@@ -187,14 +188,14 @@ func TestMempoolFilters(t *testing.T) {
 	}{
 		{10, nopPreFilter, nopPostFilter, 10},
 		{10, mempool.PreCheckMaxBytes(10), nopPostFilter, 0},
-		{10, mempool.PreCheckMaxBytes(22), nopPostFilter, 10},
+		{10, mempool.PreCheckMaxBytes(26), nopPostFilter, 10},
 		{10, nopPreFilter, mempool.PostCheckMaxGas(-1), 10},
 		{10, nopPreFilter, mempool.PostCheckMaxGas(0), 0},
 		{10, nopPreFilter, mempool.PostCheckMaxGas(1), 10},
 		{10, nopPreFilter, mempool.PostCheckMaxGas(3000), 10},
 		{10, mempool.PreCheckMaxBytes(10), mempool.PostCheckMaxGas(20), 0},
 		{10, mempool.PreCheckMaxBytes(30), mempool.PostCheckMaxGas(20), 10},
-		{10, mempool.PreCheckMaxBytes(22), mempool.PostCheckMaxGas(1), 10},
+		{10, mempool.PreCheckMaxBytes(28), mempool.PostCheckMaxGas(1), 10},
 		{10, mempool.PreCheckMaxBytes(22), mempool.PostCheckMaxGas(0), 0},
 	}
 	for tcIndex, tt := range tests {
@@ -678,6 +679,38 @@ func TestMempoolRemoteAppConcurrency(t *testing.T) {
 	}
 
 	require.NoError(t, mp.FlushAppConn())
+}
+
+func TestRemoveBlobTx(t *testing.T) {
+	app := kvstore.NewApplication()
+	cc := proxy.NewLocalClientCreator(app)
+
+	cfg := config.ResetTestRoot("mempool_test")
+
+	cfg.Mempool.MaxTxsBytes = 1000
+	mp, cleanup := newMempoolWithAppAndConfig(cc, cfg)
+	defer cleanup()
+
+	originalTx := []byte{1, 2, 3, 4}
+	indexWrapper, err := types.MarshalIndexWrapper(originalTx, 100)
+	require.NoError(t, err)
+
+	// create the blobTx
+	b := tmproto.Blob{
+		NamespaceId:  []byte{1, 2, 3, 4, 5, 6, 7, 8},
+		Data:         []byte{1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+		ShareVersion: 0,
+	}
+	bTx, err := types.MarshalBlobTx(originalTx, &b)
+	require.NoError(t, err)
+
+	err = mp.CheckTx(bTx, nil, mempool.TxInfo{})
+	require.NoError(t, err)
+
+	err = mp.Update(1, []types.Tx{indexWrapper}, abciResponses(1, abci.CodeTypeOK), nil, nil)
+	require.NoError(t, err)
+	assert.EqualValues(t, 0, mp.Size())
+	assert.EqualValues(t, 0, mp.SizeBytes())
 }
 
 // caller must close server

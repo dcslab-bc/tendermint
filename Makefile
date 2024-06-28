@@ -3,6 +3,9 @@ OUTPUT?=build/tendermint
 
 BUILD_TAGS?=tendermint
 
+IMAGE := ghcr.io/tendermint/docker-build-proto:latest
+DOCKER_PROTO_BUILDER := docker run -v $(shell pwd):/workspace --workdir /workspace $(IMAGE)
+
 # If building a release, please checkout the version tag to get the correct version setting
 ifneq ($(shell git symbolic-ref -q --short HEAD),)
 VERSION := unreleased-$(shell git symbolic-ref -q --short HEAD)-$(shell git rev-parse HEAD)
@@ -12,7 +15,7 @@ endif
 
 LD_FLAGS = -X github.com/tendermint/tendermint/version.TMCoreSemVer=$(VERSION)
 BUILD_FLAGS = -mod=readonly -ldflags "$(LD_FLAGS)"
-HTTPS_GIT := https://github.com/tendermint/tendermint.git
+HTTPS_GIT := https://github.com/celestiaorg/celestia-core.git
 CGO_ENABLED ?= 0
 
 # handle nostrip
@@ -52,7 +55,7 @@ endif
 # allow users to pass additional flags via the conventional LDFLAGS variable
 LD_FLAGS += $(LDFLAGS)
 
-all: check build test install
+all: build test install
 .PHONY: all
 
 include tests.mk
@@ -60,6 +63,8 @@ include tests.mk
 ###############################################################################
 ###                                Build Tendermint                        ###
 ###############################################################################
+
+
 
 build:
 	CGO_ENABLED=$(CGO_ENABLED) go build $(BUILD_FLAGS) -tags '$(BUILD_TAGS)' -o $(OUTPUT) ./cmd/tendermint/
@@ -121,7 +126,7 @@ proto-check-breaking: check-proto-deps
 .PHONY: proto-check-breaking
 
 proto-check-breaking-ci:
-	@go run github.com/bufbuild/buf/cmd/buf breaking --against $(HTTPS_GIT)#branch=v0.34.x
+	@go run github.com/bufbuild/buf/cmd/buf breaking --against $(HTTPS_GIT)#branch=v0.34.x-celestia
 .PHONY: proto-check-breaking-ci
 
 ###############################################################################

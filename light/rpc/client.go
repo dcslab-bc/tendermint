@@ -343,6 +343,52 @@ func (c *Client) Block(ctx context.Context, height *int64) (*ctypes.ResultBlock,
 	return res, nil
 }
 
+// SignedBlock calls rpcclient#SignedBlock and then verifies the result.
+func (c *Client) SignedBlock(ctx context.Context, height *int64) (*ctypes.ResultSignedBlock, error) {
+	res, err := c.next.SignedBlock(ctx, height)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate res.
+	if err := res.Header.ValidateBasic(); err != nil {
+		return nil, err
+	}
+	if height != nil && res.Header.Height != *height {
+		return nil, fmt.Errorf("incorrect height returned. Expected %d, got %d", *height, res.Header.Height)
+	}
+	if err := res.Commit.ValidateBasic(); err != nil {
+		return nil, err
+	}
+	if err := res.ValidatorSet.ValidateBasic(); err != nil {
+		return nil, err
+	}
+
+	// NOTE: this will re-request the header and commit from the primary. Ideally, you'd just
+	// fetch the data from the primary and use the light client to verify it.
+	l, err := c.updateLightClientIfNeededTo(ctx, &res.Header.Height)
+	if err != nil {
+		return nil, err
+	}
+
+	if bmH, bH := l.Header.Hash(), res.Header.Hash(); !bytes.Equal(bmH, bH) {
+		return nil, fmt.Errorf("light client header %X does not match with response header %X",
+			bmH, bH)
+	}
+
+	if bmH, bH := l.Header.DataHash, res.Data.Hash(); !bytes.Equal(bmH, bH) {
+		return nil, fmt.Errorf("light client data hash %X does not match with response data %X",
+			bmH, bH)
+	}
+
+	return &ctypes.ResultSignedBlock{
+		Header:       res.Header,
+		Commit:       *l.Commit,
+		ValidatorSet: *l.ValidatorSet,
+		Data:         res.Data,
+	}, nil
+}
+
 // BlockByHash calls rpcclient#BlockByHash and then verifies the result.
 func (c *Client) BlockByHash(ctx context.Context, hash []byte) (*ctypes.ResultBlock, error) {
 	res, err := c.next.BlockByHash(ctx, hash)
@@ -455,6 +501,26 @@ func (c *Client) Commit(ctx context.Context, height *int64) (*ctypes.ResultCommi
 	}, nil
 }
 
+func (c *Client) DataCommitment(
+	ctx context.Context,
+	firstBlock uint64,
+	lastBlock uint64,
+) (*ctypes.ResultDataCommitment, error) {
+	return c.next.DataCommitment(ctx, firstBlock, lastBlock)
+}
+
+// DataRootInclusionProof calls rpcclient#DataRootInclusionProof method and returns
+// a merkle proof for the data root of block height `height` to the set of blocks
+// defined by `firstBlock` and `lastBlock`.
+func (c *Client) DataRootInclusionProof(
+	ctx context.Context,
+	height uint64,
+	firstBlock uint64,
+	lastBlock uint64,
+) (*ctypes.ResultDataRootInclusionProof, error) {
+	return c.next.DataRootInclusionProof(ctx, height, firstBlock, lastBlock)
+}
+
 // Tx calls rpcclient#Tx method and then verifies the proof if such was
 // requested.
 func (c *Client) Tx(ctx context.Context, hash []byte, prove bool) (*ctypes.ResultTx, error) {
@@ -476,6 +542,19 @@ func (c *Client) Tx(ctx context.Context, hash []byte, prove bool) (*ctypes.Resul
 
 	// Validate the proof.
 	return res, res.Proof.Validate(l.DataHash)
+}
+
+// ProveShares calls rpcclient#ProveShares method and returns an NMT proof for a set
+// of shares, defined by `startShare` and `endShare`, to the corresponding rows.
+// Then, a binary merkle inclusion proof from the latter rows to the data root.
+func (c *Client) ProveShares(
+	ctx context.Context,
+	height uint64,
+	startShare uint64,
+	endShare uint64,
+) (types.ShareProof, error) {
+	res, err := c.next.ProveShares(ctx, height, startShare, endShare)
+	return res, err
 }
 
 func (c *Client) TxSearch(

@@ -1,12 +1,18 @@
 package core
 
 import (
+	"bytes"
+	"context"
+	"encoding/hex"
 	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tendermint/tendermint/crypto/merkle"
+	"github.com/tendermint/tendermint/libs/pubsub/query"
+	tmrand "github.com/tendermint/tendermint/libs/rand"
 	dbm "github.com/tendermint/tm-db"
 
 	abci "github.com/tendermint/tendermint/abci/types"
@@ -80,13 +86,14 @@ func TestBlockResults(t *testing.T) {
 		BeginBlock: &abci.ResponseBeginBlock{},
 	}
 
-	env = &Environment{}
-	env.StateStore = sm.NewStore(dbm.NewMemDB(), sm.StoreOptions{
+	globalEnv = &Environment{}
+	globalEnv.StateStore = sm.NewStore(dbm.NewMemDB(), sm.StoreOptions{
 		DiscardABCIResponses: false,
 	})
-	err := env.StateStore.SaveABCIResponses(100, results)
+	err := globalEnv.StateStore.SaveABCIResponses(100, results)
 	require.NoError(t, err)
-	env.BlockStore = mockBlockStore{height: 100}
+	globalEnv.BlockStore = mockBlockStore{height: 100}
+	SetEnvironment(globalEnv)
 
 	testCases := []struct {
 		height  int64
@@ -117,20 +124,232 @@ func TestBlockResults(t *testing.T) {
 	}
 }
 
+func TestEncodeDataRootTuple(t *testing.T) {
+	height := uint64(2)
+	dataRoot, err := hex.DecodeString("82dc1607d84557d3579ce602a45f5872e821c36dbda7ec926dfa17ebc8d5c013")
+	squareSize := uint64(64)
+	require.NoError(t, err)
+
+	expectedEncoding, err := hex.DecodeString(
+		// hex representation of height padded to 32 bytes
+		"0000000000000000000000000000000000000000000000000000000000000002" +
+			// data root
+			"82dc1607d84557d3579ce602a45f5872e821c36dbda7ec926dfa17ebc8d5c013" +
+			// original square size
+			"0000000000000000000000000000000000000000000000000000000000000040",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, expectedEncoding)
+
+	actualEncoding, err := EncodeDataRootTuple(height, *(*[32]byte)(dataRoot), squareSize)
+	require.NoError(t, err)
+	require.NotNil(t, actualEncoding)
+
+	// Check that the length of packed data is correct
+	assert.Equal(t, len(actualEncoding), 96)
+	assert.Equal(t, expectedEncoding, actualEncoding)
+}
+
+func TestDataCommitmentResults(t *testing.T) {
+	env := &Environment{}
+	height := int64(2826)
+
+	blocks := randomBlocks(height)
+	blockStore := mockBlockStore{
+		height: height,
+		blocks: blocks,
+	}
+	env.BlockStore = blockStore
+
+	testCases := []struct {
+		beginQuery int
+		endQuery   int
+		expectPass bool
+	}{
+		{10, 15, true},
+		{2727, 2828, false},
+		{10, 9, false},
+		{0, 1000, false},
+		{0, 10, false},
+		{10, 8, false},
+	}
+
+	for _, tc := range testCases {
+		env.BlockIndexer = mockBlockIndexer{
+			height:          height,
+			beginQueryBlock: tc.beginQuery,
+			endQueryBlock:   tc.endQuery,
+		}
+		SetEnvironment(env)
+
+		actualCommitment, err := DataCommitment(&rpctypes.Context{}, uint64(tc.beginQuery), uint64(tc.endQuery))
+		if tc.expectPass {
+			require.Nil(t, err, "should generate the needed data commitment.")
+
+			size := tc.endQuery - tc.beginQuery + 1
+			dataRootEncodedTuples := make([][]byte, size)
+			for i := 0; i < size; i++ {
+				encodedTuple, err := EncodeDataRootTuple(
+					uint64(blocks[tc.beginQuery+i].Height),
+					*(*[32]byte)(blocks[tc.beginQuery+i].DataHash),
+					blocks[tc.beginQuery+i].SquareSize,
+				)
+				require.NoError(t, err)
+				dataRootEncodedTuples[i] = encodedTuple
+			}
+			expectedCommitment := merkle.HashFromByteSlices(dataRootEncodedTuples)
+
+			if !bytes.Equal(expectedCommitment, actualCommitment.DataCommitment) {
+				assert.Error(t, nil, "expected data commitment and actual data commitment doesn't match.")
+			}
+		} else {
+			require.NotNil(t, err, "couldn't generate the needed data commitment.")
+		}
+	}
+}
+
+func TestDataRootInclusionProofResults(t *testing.T) {
+	env := &Environment{}
+	env.StateStore = sm.NewStore(
+		dbm.NewMemDB(), sm.StoreOptions{
+			DiscardABCIResponses: false,
+		},
+	)
+
+	height := int64(2826)
+	env.BlockStore = mockBlockStore{height: height}
+	SetEnvironment(env)
+
+	blocks := randomBlocks(height)
+	blockStore := mockBlockStore{
+		height: height,
+		blocks: blocks,
+	}
+	env.BlockStore = blockStore
+
+	testCases := []struct {
+		height     int
+		firstQuery int
+		lastQuery  int
+		expectPass bool
+	}{
+		{8, 10, 15, false},
+		{10, 0, 15, false},
+		{10, 10, 15, true},
+		{13, 10, 15, true},
+		{15, 10, 15, true},
+		{17, 10, 15, false},
+	}
+
+	for _, tc := range testCases {
+		env.BlockIndexer = mockBlockIndexer{
+			height:          height,
+			beginQueryBlock: tc.firstQuery,
+			endQueryBlock:   tc.lastQuery,
+		}
+
+		proof, err := DataRootInclusionProof(
+			&rpctypes.Context{},
+			int64(tc.height),
+			uint64(tc.firstQuery),
+			uint64(tc.lastQuery),
+		)
+		if tc.expectPass {
+			require.Nil(t, err, "should generate block height data root inclusion proof.")
+
+			size := tc.lastQuery - tc.firstQuery + 1
+			dataRootEncodedTuples := make([][]byte, size)
+			for i := 0; i < size; i++ {
+				encodedTuple, err := EncodeDataRootTuple(
+					uint64(blocks[tc.firstQuery+i].Height),
+					*(*[32]byte)(blocks[tc.firstQuery+i].DataHash),
+					blocks[tc.firstQuery+i].SquareSize,
+				)
+				require.NoError(t, err)
+				dataRootEncodedTuples[i] = encodedTuple
+			}
+			commitment := merkle.HashFromByteSlices(dataRootEncodedTuples)
+
+			err = proof.Proof.Verify(commitment, dataRootEncodedTuples[tc.height-tc.firstQuery])
+			require.NoError(t, err)
+		} else {
+			require.NotNil(t, err, "shouldn't be able to generate proof.")
+		}
+	}
+}
+
 type mockBlockStore struct {
 	height int64
+	blocks []*types.Block
 }
 
 func (mockBlockStore) Base() int64                                       { return 1 }
 func (store mockBlockStore) Height() int64                               { return store.height }
 func (store mockBlockStore) Size() int64                                 { return store.height }
 func (mockBlockStore) LoadBaseMeta() *types.BlockMeta                    { return nil }
-func (mockBlockStore) LoadBlockMeta(height int64) *types.BlockMeta       { return nil }
-func (mockBlockStore) LoadBlock(height int64) *types.Block               { return nil }
 func (mockBlockStore) LoadBlockByHash(hash []byte) *types.Block          { return nil }
 func (mockBlockStore) LoadBlockPart(height int64, index int) *types.Part { return nil }
 func (mockBlockStore) LoadBlockCommit(height int64) *types.Commit        { return nil }
 func (mockBlockStore) LoadSeenCommit(height int64) *types.Commit         { return nil }
 func (mockBlockStore) PruneBlocks(height int64) (uint64, error)          { return 0, nil }
 func (mockBlockStore) SaveBlock(block *types.Block, blockParts *types.PartSet, seenCommit *types.Commit) {
+}
+
+func (store mockBlockStore) LoadBlockMeta(height int64) *types.BlockMeta {
+	if height > store.height {
+		return nil
+	}
+	block := store.blocks[height]
+	return &types.BlockMeta{
+		BlockID: types.BlockID{Hash: block.Hash(), PartSetHeader: block.MakePartSet(types.BlockPartSizeBytes).Header()},
+		Header:  block.Header,
+	}
+}
+
+func (store mockBlockStore) LoadBlock(height int64) *types.Block {
+	if height > store.height {
+		return nil
+	}
+	return store.blocks[height]
+}
+
+// mockBlockIndexer used to mock the set of indexed blocks and return a predefined one.
+type mockBlockIndexer struct {
+	height          int64
+	beginQueryBlock int // used not to have to parse any query
+	endQueryBlock   int // used not to have to parse any query
+}
+
+func (indexer mockBlockIndexer) Has(height int64) (bool, error)            { return true, nil }
+func (indexer mockBlockIndexer) Index(types.EventDataNewBlockHeader) error { return nil }
+
+// Search returns a list of block heights corresponding to the values of `indexer.endQueryBlock`
+// and `indexer.beginQueryBlock`.
+// Doesn't use the query parameter for anything.
+func (indexer mockBlockIndexer) Search(ctx context.Context, _ *query.Query) ([]int64, error) {
+	size := indexer.endQueryBlock - indexer.beginQueryBlock + 1
+	results := make([]int64, size)
+	for i := 0; i < size; i++ {
+		results[i] = int64(indexer.beginQueryBlock + i)
+	}
+	return results, nil
+}
+
+// randomBlocks generates a set of random blocks up to the provided height.
+func randomBlocks(height int64) []*types.Block {
+	blocks := make([]*types.Block, height)
+	for i := int64(0); i < height; i++ {
+		blocks[i] = randomBlock(i)
+	}
+	return blocks
+}
+
+// randomBlock generates a Block with a certain height and random data hash.
+func randomBlock(height int64) *types.Block {
+	return &types.Block{
+		Header: types.Header{
+			Height:   height,
+			DataHash: tmrand.Bytes(32),
+		},
+	}
 }

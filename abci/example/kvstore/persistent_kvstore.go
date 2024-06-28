@@ -170,6 +170,16 @@ func (app *PersistentKVStoreApplication) ApplySnapshotChunk(
 	return types.ResponseApplySnapshotChunk{Result: types.ResponseApplySnapshotChunk_ABORT}
 }
 
+func (app *PersistentKVStoreApplication) PrepareProposal(
+	req types.RequestPrepareProposal) types.ResponsePrepareProposal {
+	return app.app.PrepareProposal(req)
+}
+
+func (app *PersistentKVStoreApplication) ProcessProposal(
+	req types.RequestProcessProposal) types.ResponseProcessProposal {
+	return types.ResponseProcessProposal{Result: types.ResponseProcessProposal_ACCEPT}
+}
+
 //---------------------------------------------
 // update validators
 

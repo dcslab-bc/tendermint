@@ -30,6 +30,7 @@ import (
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/proxy"
 	sm "github.com/tendermint/tendermint/state"
+	"github.com/tendermint/tendermint/state/test/factory"
 	"github.com/tendermint/tendermint/types"
 )
 
@@ -792,7 +793,7 @@ func applyBlock(stateStore sm.Store, st sm.State, blk *types.Block, proxyApp pro
 	blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyApp.Consensus(), mempool, evpool)
 
 	blkID := types.BlockID{Hash: blk.Hash(), PartSetHeader: blk.MakePartSet(testPartSize).Header()}
-	newState, _, err := blockExec.ApplyBlock(st, blkID, blk)
+	newState, _, err := blockExec.ApplyBlock(st, blkID, blk, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -1005,7 +1006,13 @@ func makeBlock(state sm.State, lastBlock *types.Block, lastBlockMeta *types.Bloc
 			lastBlockMeta.BlockID, []types.CommitSig{vote.CommitSig()})
 	}
 
-	return state.MakeBlock(height, []types.Tx{}, lastCommit, nil, state.Validators.GetProposer().Address)
+	return state.MakeBlock(
+		height,
+		factory.MakeData([]types.Tx{}, nil),
+		lastCommit,
+		nil,
+		state.Validators.GetProposer().Address,
+	)
 }
 
 type badApp struct {

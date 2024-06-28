@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
+	"github.com/celestiaorg/nmt/namespace"
 	"github.com/gogo/protobuf/proto"
 	gogotypes "github.com/gogo/protobuf/types"
 
@@ -49,9 +51,10 @@ type Block struct {
 	LastCommit *Commit      `json:"last_commit"`
 }
 
-// ValidateBasic performs basic validation that doesn't involve state data.
-// It checks the internal consistency of the block.
-// Further validation is done using state#ValidateBlock.
+// ValidateBasic performs basic validation that doesn't involve state data. It
+// checks the internal consistency of the block. Further validation is done
+// using state#ValidateBlock. celestia-app's ProcessProposal checks that the
+// block's DataHash matches the hash of the data availability header.
 func (b *Block) ValidateBasic() error {
 	if b == nil {
 		return errors.New("nil block")
@@ -79,15 +82,6 @@ func (b *Block) ValidateBasic() error {
 		)
 	}
 
-	// NOTE: b.Data.Txs may be nil, but b.Data.Hash() still works fine.
-	if !bytes.Equal(b.DataHash, b.Data.Hash()) {
-		return fmt.Errorf(
-			"wrong Header.DataHash. Expected %v, got %v",
-			b.Data.Hash(),
-			b.DataHash,
-		)
-	}
-
 	// NOTE: b.Evidence.Evidence may be nil, but we're just looping.
 	for i, ev := range b.Evidence.Evidence {
 		if err := ev.ValidateBasic(); err != nil {
@@ -105,7 +99,9 @@ func (b *Block) ValidateBasic() error {
 	return nil
 }
 
-// fillHeader fills in any remaining header fields that are a function of the block data
+// fillHeader fills in any remaining header fields that are a function of the
+// block data NOTE: we expect celestia-app to populate the block DataHash but we
+// populate it here (in celestia-core) to not break existing tests in this repo.
 func (b *Block) fillHeader() {
 	if b.LastCommitHash == nil {
 		b.LastCommitHash = b.LastCommit.Hash()
@@ -313,6 +309,27 @@ func MaxDataBytesNoEvidence(maxBytes int64, valsCount int) int64 {
 	}
 
 	return maxDataBytes
+}
+
+// MakeBlock returns a new block with an empty header, except what can be
+// computed from itself.
+// It populates the same set of fields validated by ValidateBasic.
+func MakeBlock(
+	height int64,
+	data Data,
+	lastCommit *Commit,
+	evidence []Evidence) *Block {
+	block := &Block{
+		Header: Header{
+			Version: tmversion.Consensus{Block: version.BlockProtocol, App: 0},
+			Height:  height,
+		},
+		Data:       data,
+		Evidence:   EvidenceData{Evidence: evidence},
+		LastCommit: lastCommit,
+	}
+	block.fillHeader()
+	return block
 }
 
 //-----------------------------------------------------------------------------
@@ -988,19 +1005,32 @@ func CommitFromProto(cp *tmproto.Commit) (*Commit, error) {
 
 //-----------------------------------------------------------------------------
 
-// Data contains the set of transactions included in the block
+// Data contains all the available Data of the block.
+// Data with reserved namespaces (Txs, IntermediateStateRoots, Evidence) and
+// Celestia application specific Blobs.
 type Data struct {
-
 	// Txs that will be applied by state @ block.Height+1.
 	// NOTE: not all txs here are valid.  We're just agreeing on the order first.
 	// This means that block.AppHash does not include these txs.
 	Txs Txs `json:"txs"`
 
+	// The blobs included in this block.
+	Blobs []Blob `json:"blobs"`
+
+	// SquareSize is the size of the square after splitting all the block data
+	// into shares. The erasure data is discarded after generation, and keeping this
+	// value avoids unnecessarily regenerating all of the shares when returning
+	// proofs that some element was included in the block
+	SquareSize uint64 `json:"square_size"`
+
 	// Volatile
 	hash tmbytes.HexBytes
 }
 
-// Hash returns the hash of the data
+// Hash returns the hash of the data. `data.hash` is expected to be set by
+// PrepareProposal in celestia-app. However, this function falls back to
+// calculating `data.hash` as vanilla tendermint would in order to satisfy unit
+// and e2e tests.
 func (data *Data) Hash() tmbytes.HexBytes {
 	if data == nil {
 		return (Txs{}).Hash()
@@ -1008,7 +1038,68 @@ func (data *Data) Hash() tmbytes.HexBytes {
 	if data.hash == nil {
 		data.hash = data.Txs.Hash() // NOTE: leaves of merkle tree are TxIDs
 	}
+
+	// this is the expected behavior where `data.hash` was set by celestia-app
+	// in PrepareProposal
 	return data.hash
+}
+
+// BlobsByNamespace implements sort.Interface for Blob
+type BlobsByNamespace []Blob
+
+func (b BlobsByNamespace) Len() int {
+	return len(b)
+}
+
+func (b BlobsByNamespace) Swap(i, j int) {
+	b[i], b[j] = b[j], b[i]
+}
+
+func (b BlobsByNamespace) Less(i, j int) bool {
+	// The following comparison is `<` and not `<=` because bytes.Compare returns 0 for if a == b.
+	// We want this comparison to return `false` if a == b because:
+	// If both Less(i, j) and Less(j, i) are false,
+	// then the elements at index i and j are considered equal.
+	// See https://pkg.go.dev/sort#Interface
+	return bytes.Compare(b[i].NamespaceID, b[j].NamespaceID) < 0
+}
+
+type Blob struct {
+	// NamespaceID defines the namespace of this blob, i.e. the
+	// namespace it will use in the namespaced Merkle tree.
+	NamespaceID namespace.ID
+
+	// Data is the actual data of the blob.
+	// (e.g. a block of a virtual sidechain).
+	Data []byte
+
+	// ShareVersion is the version of the share format that this blob should use
+	// when encoded into shares.
+	ShareVersion uint8
+}
+
+func BlobFromProto(p *tmproto.Blob) Blob {
+	if p == nil {
+		return Blob{}
+	}
+	return Blob{
+		NamespaceID:  p.NamespaceId,
+		Data:         p.Data,
+		ShareVersion: uint8(p.ShareVersion),
+	}
+}
+
+func BlobsFromProto(p []*tmproto.Blob) []Blob {
+	if p == nil {
+		return []Blob{}
+	}
+
+	blobs := make([]Blob, 0, len(p))
+
+	for i := 0; i < len(p); i++ {
+		blobs = append(blobs, BlobFromProto(p[i]))
+	}
+	return blobs
 }
 
 // StringIndented returns an indented string representation of the transactions.
@@ -1026,9 +1117,8 @@ func (data *Data) StringIndented(indent string) string {
 	}
 	return fmt.Sprintf(`Data{
 %s  %v
-%s}#%v`,
-		indent, strings.Join(txStrings, "\n"+indent+"  "),
-		indent, data.hash)
+}`,
+		indent, strings.Join(txStrings, "\n"+indent+"  "))
 }
 
 // ToProto converts Data to protobuf
@@ -1042,6 +1132,19 @@ func (data *Data) ToProto() tmproto.Data {
 		}
 		tp.Txs = txBzs
 	}
+
+	protoBlobs := make([]tmproto.Blob, len(data.Blobs))
+	for i, b := range data.Blobs {
+		protoBlobs[i] = tmproto.Blob{
+			NamespaceId:  b.NamespaceID,
+			Data:         b.Data,
+			ShareVersion: uint32(b.ShareVersion),
+		}
+	}
+	tp.Blobs = protoBlobs
+	tp.SquareSize = data.SquareSize
+
+	tp.Hash = data.hash
 
 	return *tp
 }
@@ -1063,6 +1166,17 @@ func DataFromProto(dp *tmproto.Data) (Data, error) {
 	} else {
 		data.Txs = Txs{}
 	}
+
+	blobs := make([]Blob, len(dp.Blobs))
+	for i, m := range dp.Blobs {
+		if m.ShareVersion > math.MaxUint8 {
+			return Data{}, fmt.Errorf("share version %d is too large", m.ShareVersion)
+		}
+		blobs[i] = Blob{NamespaceID: m.NamespaceId, Data: m.Data, ShareVersion: uint8(m.ShareVersion)}
+	}
+	data.Blobs = blobs
+	data.SquareSize = dp.SquareSize
+	data.hash = dp.Hash
 
 	return *data, nil
 }

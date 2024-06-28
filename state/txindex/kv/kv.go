@@ -69,26 +69,7 @@ func (txi *TxIndex) AddBatch(b *txindex.Batch) error {
 	defer storeBatch.Close()
 
 	for _, result := range b.Ops {
-		hash := types.Tx(result.Tx).Hash()
-
-		// index tx by events
-		err := txi.indexEvents(result, hash, storeBatch)
-		if err != nil {
-			return err
-		}
-
-		// index by height (always)
-		err = storeBatch.Set(keyForHeight(result), hash)
-		if err != nil {
-			return err
-		}
-
-		rawBytes, err := proto.Marshal(result)
-		if err != nil {
-			return err
-		}
-		// index by hash (always)
-		err = storeBatch.Set(hash, rawBytes)
+		err := txi.indexResult(storeBatch, result)
 		if err != nil {
 			return err
 		}
@@ -110,39 +91,7 @@ func (txi *TxIndex) Index(result *abci.TxResult) error {
 	b := txi.store.NewBatch()
 	defer b.Close()
 
-	hash := types.Tx(result.Tx).Hash()
-
-	if !result.Result.IsOK() {
-		oldResult, err := txi.Get(hash)
-		if err != nil {
-			return err
-		}
-
-		// if the new transaction failed and it's already indexed in an older block and was successful
-		// we skip it as we want users to get the older successful transaction when they query.
-		if oldResult != nil && oldResult.Result.Code == abci.CodeTypeOK {
-			return nil
-		}
-	}
-
-	// index tx by events
-	err := txi.indexEvents(result, hash, b)
-	if err != nil {
-		return err
-	}
-
-	// index by height (always)
-	err = b.Set(keyForHeight(result), hash)
-	if err != nil {
-		return err
-	}
-
-	rawBytes, err := proto.Marshal(result)
-	if err != nil {
-		return err
-	}
-	// index by hash (always)
-	err = b.Set(hash, rawBytes)
+	err := txi.indexResult(b, result)
 	if err != nil {
 		return err
 	}
@@ -173,6 +122,47 @@ func (txi *TxIndex) indexEvents(result *abci.TxResult, hash []byte, store dbm.Ba
 		}
 	}
 
+	return nil
+}
+
+func (txi *TxIndex) indexResult(batch dbm.Batch, result *abci.TxResult) error {
+	hash := types.Tx(result.Tx).Hash()
+
+	rawBytes, err := proto.Marshal(result)
+	if err != nil {
+		return err
+	}
+
+	if !result.Result.IsOK() {
+		oldResult, err := txi.Get(hash)
+		if err != nil {
+			return err
+		}
+
+		// if the new transaction failed and it's already indexed in an older block and was successful
+		// we skip it as we want users to get the older successful transaction when they query.
+		if oldResult != nil && oldResult.Result.Code == abci.CodeTypeOK {
+			return nil
+		}
+	}
+
+	// index tx by events
+	err = txi.indexEvents(result, hash, batch)
+	if err != nil {
+		return err
+	}
+
+	// index by height (always)
+	err = batch.Set(keyForHeight(result), hash)
+	if err != nil {
+		return err
+	}
+
+	// index by hash (always)
+	err = batch.Set(hash, rawBytes)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

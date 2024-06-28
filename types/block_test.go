@@ -3,11 +3,13 @@ package types
 import (
 	// it is ok to use math/rand here: we do not need a cryptographically secure random
 	// number generator here and we can run the tests a bit faster
+	stdbytes "bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"math"
 	"os"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -44,7 +46,7 @@ func TestBlockAddEvidence(t *testing.T) {
 	ev := NewMockDuplicateVoteEvidenceWithValidator(h, time.Now(), vals[0], "block-test-chain")
 	evList := []Evidence{ev}
 
-	block := MakeBlock(h, txs, commit, evList)
+	block := MakeBlock(h, makeData(txs, nil), commit, evList)
 	require.NotNil(t, block)
 	require.Equal(t, 1, len(block.Evidence.Evidence))
 	require.NotNil(t, block.EvidenceHash)
@@ -77,13 +79,6 @@ func TestBlockValidateBasic(t *testing.T) {
 			blk.LastCommit.hash = nil // clear hash or change wont be noticed
 		}, true},
 		{"Remove LastCommitHash", func(blk *Block) { blk.LastCommitHash = []byte("something else") }, true},
-		{"Tampered Data", func(blk *Block) {
-			blk.Data.Txs[0] = Tx("something else")
-			blk.Data.hash = nil // clear hash or change wont be noticed
-		}, true},
-		{"Tampered DataHash", func(blk *Block) {
-			blk.DataHash = tmrand.Bytes(len(blk.DataHash))
-		}, true},
 		{"Tampered EvidenceHash", func(blk *Block) {
 			blk.EvidenceHash = []byte("something else")
 		}, true},
@@ -95,7 +90,7 @@ func TestBlockValidateBasic(t *testing.T) {
 		tc := tc
 		i := i
 		t.Run(tc.testName, func(t *testing.T) {
-			block := MakeBlock(h, txs, commit, evList)
+			block := MakeBlock(h, makeData(txs, nil), commit, evList)
 			block.ProposerAddress = valSet.GetProposer().Address
 			tc.malleateBlock(block)
 			err = block.ValidateBasic()
@@ -106,13 +101,13 @@ func TestBlockValidateBasic(t *testing.T) {
 
 func TestBlockHash(t *testing.T) {
 	assert.Nil(t, (*Block)(nil).Hash())
-	assert.Nil(t, MakeBlock(int64(3), []Tx{Tx("Hello World")}, nil, nil).Hash())
+	assert.Nil(t, MakeBlock(int64(3), makeData([]Tx{Tx("Hello World")}, nil), nil, nil).Hash())
 }
 
 func TestBlockMakePartSet(t *testing.T) {
 	assert.Nil(t, (*Block)(nil).MakePartSet(2))
 
-	partSet := MakeBlock(int64(3), []Tx{Tx("Hello World")}, nil, nil).MakePartSet(1024)
+	partSet := MakeBlock(int64(3), makeData([]Tx{Tx("Hello World")}, nil), nil, nil).MakePartSet(1024)
 	assert.NotNil(t, partSet)
 	assert.EqualValues(t, 1, partSet.Total())
 }
@@ -130,7 +125,7 @@ func TestBlockMakePartSetWithEvidence(t *testing.T) {
 	ev := NewMockDuplicateVoteEvidenceWithValidator(h, time.Now(), vals[0], "block-test-chain")
 	evList := []Evidence{ev}
 
-	partSet := MakeBlock(h, []Tx{Tx("Hello World")}, commit, evList).MakePartSet(512)
+	partSet := MakeBlock(h, makeData([]Tx{Tx("Hello World")}, nil), commit, evList).MakePartSet(512)
 	assert.NotNil(t, partSet)
 	assert.EqualValues(t, 4, partSet.Total())
 }
@@ -147,7 +142,7 @@ func TestBlockHashesTo(t *testing.T) {
 	ev := NewMockDuplicateVoteEvidenceWithValidator(h, time.Now(), vals[0], "block-test-chain")
 	evList := []Evidence{ev}
 
-	block := MakeBlock(h, []Tx{Tx("Hello World")}, commit, evList)
+	block := MakeBlock(h, makeData([]Tx{Tx("Hello World")}, nil), commit, evList)
 	block.ValidatorsHash = valSet.Hash()
 	assert.False(t, block.HashesTo([]byte{}))
 	assert.False(t, block.HashesTo([]byte("something else")))
@@ -155,7 +150,7 @@ func TestBlockHashesTo(t *testing.T) {
 }
 
 func TestBlockSize(t *testing.T) {
-	size := MakeBlock(int64(3), []Tx{Tx("Hello World")}, nil, nil).Size()
+	size := MakeBlock(int64(3), makeData([]Tx{Tx("Hello World")}, nil), nil, nil).Size()
 	if size <= 0 {
 		t.Fatal("Size of the block is zero or negative")
 	}
@@ -166,7 +161,7 @@ func TestBlockString(t *testing.T) {
 	assert.Equal(t, "nil-Block", (*Block)(nil).StringIndented(""))
 	assert.Equal(t, "nil-Block", (*Block)(nil).StringShort())
 
-	block := MakeBlock(int64(3), []Tx{Tx("Hello World")}, nil, nil)
+	block := MakeBlock(int64(3), makeData([]Tx{Tx("Hello World")}, nil), nil, nil)
 	assert.NotEqual(t, "nil-Block", block.String())
 	assert.NotEqual(t, "nil-Block", block.StringIndented(""))
 	assert.NotEqual(t, "nil-Block", block.StringShort())
@@ -208,11 +203,6 @@ var emptyBytes = []byte{0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0x
 func TestNilHeaderHashDoesntCrash(t *testing.T) {
 	assert.Equal(t, nilBytes, []byte((*Header)(nil).Hash()))
 	assert.Equal(t, nilBytes, []byte((new(Header)).Hash()))
-}
-
-func TestNilDataHashDoesntCrash(t *testing.T) {
-	assert.Equal(t, emptyBytes, []byte((*Data)(nil).Hash()))
-	assert.Equal(t, emptyBytes, []byte(new(Data).Hash()))
 }
 
 func TestCommit(t *testing.T) {
@@ -629,17 +619,16 @@ func TestBlockIDValidateBasic(t *testing.T) {
 func TestBlockProtoBuf(t *testing.T) {
 	h := tmrand.Int63()
 	c1 := randCommit(time.Now())
-	b1 := MakeBlock(h, []Tx{Tx([]byte{1})}, &Commit{Signatures: []CommitSig{}}, []Evidence{})
+	b1 := MakeBlock(h, makeData([]Tx{Tx([]byte{1})}, nil), &Commit{Signatures: []CommitSig{}}, []Evidence{})
 	b1.ProposerAddress = tmrand.Bytes(crypto.AddressSize)
 
-	b2 := MakeBlock(h, []Tx{Tx([]byte{1})}, c1, []Evidence{})
-	b2.ProposerAddress = tmrand.Bytes(crypto.AddressSize)
 	evidenceTime := time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)
 	evi := NewMockDuplicateVoteEvidence(h, evidenceTime, "block-test-chain")
-	b2.Evidence = EvidenceData{Evidence: EvidenceList{evi}}
-	b2.EvidenceHash = b2.Evidence.Hash()
+	b2 := MakeBlock(h, makeData([]Tx{Tx([]byte{1})}, nil), c1, []Evidence{evi})
+	b2.ProposerAddress = tmrand.Bytes(crypto.AddressSize)
+	b2.Evidence.ByteSize()
 
-	b3 := MakeBlock(h, []Tx{}, c1, []Evidence{})
+	b3 := MakeBlock(h, makeData([]Tx{}, nil), c1, []Evidence{})
 	b3.ProposerAddress = tmrand.Bytes(crypto.AddressSize)
 	testCases := []struct {
 		msg      string
@@ -664,7 +653,7 @@ func TestBlockProtoBuf(t *testing.T) {
 		if tc.expPass2 {
 			require.NoError(t, err, tc.msg)
 			require.EqualValues(t, tc.b1.Header, block.Header, tc.msg)
-			require.EqualValues(t, tc.b1.Data, block.Data, tc.msg)
+			require.EqualValues(t, tc.b1.Data, block.Data, tc.msg) // todo
 			require.EqualValues(t, tc.b1.Evidence.Evidence, block.Evidence.Evidence, tc.msg)
 			require.EqualValues(t, *tc.b1.LastCommit, *block.LastCommit, tc.msg)
 		} else {
@@ -673,26 +662,40 @@ func TestBlockProtoBuf(t *testing.T) {
 	}
 }
 
-func TestDataProtoBuf(t *testing.T) {
-	data := &Data{Txs: Txs{Tx([]byte{1}), Tx([]byte{2}), Tx([]byte{3})}}
-	data2 := &Data{Txs: Txs{}}
-	testCases := []struct {
-		msg     string
-		data1   *Data
-		expPass bool
-	}{
-		{"success", data, true},
-		{"success data2", data2, true},
+func TestBlockDataProtobuf(t *testing.T) {
+	type test struct {
+		name  string
+		txs   Txs
+		blobs []Blob
 	}
-	for _, tc := range testCases {
-		protoData := tc.data1.ToProto()
-		d, err := DataFromProto(&protoData)
-		if tc.expPass {
-			require.NoError(t, err, tc.msg)
-			require.EqualValues(t, tc.data1, &d, tc.msg)
-		} else {
-			require.Error(t, err, tc.msg)
-		}
+	tests := []test{
+		{
+			name: "only txs", txs: Txs([]Tx{stdbytes.Repeat([]byte{1}, 200)}),
+		},
+		{
+			name: "everything",
+			txs:  Txs([]Tx{stdbytes.Repeat([]byte{1}, 200)}),
+			blobs: []Blob{
+				{
+					NamespaceID: []byte{8, 7, 6, 5, 4, 3, 2, 1},
+					Data:        stdbytes.Repeat([]byte{3, 2, 1, 0}, 100),
+				},
+				{
+					NamespaceID: []byte{1, 2, 3, 4, 5, 6, 7, 8},
+					Data:        stdbytes.Repeat([]byte{1, 2, 3}, 100),
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		d := Data{Txs: tt.txs, Blobs: tt.blobs}
+		firstHash := d.Hash()
+		pd := d.ToProto()
+		d2, err := DataFromProto(&pd)
+		require.NoError(t, err)
+		secondHash := d2.Hash()
+		assert.Equal(t, firstHash, secondHash, tt.name)
 	}
 }
 
@@ -853,4 +856,181 @@ func TestBlockIDEquals(t *testing.T) {
 	assert.False(t, blockID.Equals(blockIDEmpty))
 	assert.True(t, blockIDEmpty.Equals(blockIDEmpty))
 	assert.False(t, blockIDEmpty.Equals(blockIDDifferent))
+}
+
+func TestBlobsByNamespaceIsSorted(t *testing.T) {
+	sortedBlobs := []Blob{
+		{
+			NamespaceID: []byte{1, 2, 3, 4, 5, 6, 7, 8},
+			Data:        stdbytes.Repeat([]byte{1}, 100),
+		},
+		{
+			NamespaceID: []byte{8, 7, 6, 5, 4, 3, 2, 1},
+			Data:        stdbytes.Repeat([]byte{2}, 100),
+		},
+	}
+	sameNamespacedBlobs := []Blob{
+		{
+			NamespaceID: []byte{1, 2, 3, 4, 5, 6, 7, 8},
+			Data:        stdbytes.Repeat([]byte{1}, 100),
+		},
+		{
+			NamespaceID: []byte{1, 2, 3, 4, 5, 6, 7, 8},
+			Data:        stdbytes.Repeat([]byte{2}, 100),
+		},
+	}
+	unsortedBlobs := []Blob{
+		{
+			NamespaceID: []byte{8, 7, 6, 5, 4, 3, 2, 1},
+			Data:        stdbytes.Repeat([]byte{1}, 100),
+		},
+		{
+			NamespaceID: []byte{1, 2, 3, 4, 5, 6, 7, 8},
+			Data:        stdbytes.Repeat([]byte{2}, 100),
+		},
+	}
+
+	type testCase struct {
+		descripton string
+		blobs      []Blob
+		want       bool
+	}
+
+	tests := []testCase{
+		{"sorted blobs", sortedBlobs, true},
+		{"same namespace blobs", sameNamespacedBlobs, true},
+		{"unsorted blobs", unsortedBlobs, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.descripton, func(t *testing.T) {
+			bs := tc.blobs
+			assert.Equal(t, tc.want, sort.IsSorted(BlobsByNamespace(bs)))
+		})
+	}
+}
+
+// TestDataProto tests DataFromProto and Data.ToProto
+func TestDataProto(t *testing.T) {
+	type testCase struct {
+		name    string
+		proto   *tmproto.Data
+		data    Data
+		wantErr bool
+	}
+	testCases := []testCase{
+		{
+			name:    "nil proto",
+			proto:   nil,
+			data:    Data{},
+			wantErr: true,
+		},
+		{
+			name: "empty data",
+			proto: &tmproto.Data{
+				Txs:        [][]uint8(nil),
+				Blobs:      []tmproto.Blob{},
+				SquareSize: 0x0,
+				Hash:       []uint8(nil),
+			},
+			data: Data{
+				Txs:        []Tx{},
+				Blobs:      []Blob{},
+				SquareSize: 0,
+			},
+		},
+		{
+			name: "one blob",
+			proto: &tmproto.Data{
+				Txs: [][]uint8(nil),
+				Blobs: []tmproto.Blob{
+					{
+						NamespaceId:  []uint8{1, 2, 3, 4, 5, 6, 7, 8},
+						Data:         []uint8{1},
+						ShareVersion: 0x0,
+					},
+				},
+				SquareSize: 0x0,
+				Hash:       []uint8(nil),
+			},
+			data: Data{
+				Txs: []Tx{},
+				Blobs: []Blob{
+					{
+						NamespaceID:  []byte{1, 2, 3, 4, 5, 6, 7, 8},
+						Data:         []byte{1},
+						ShareVersion: 0,
+					},
+				},
+				SquareSize: 0,
+			},
+		},
+		{
+			name: "two blobs",
+			proto: &tmproto.Data{
+				Txs: [][]uint8(nil),
+				Blobs: []tmproto.Blob{
+					{
+						NamespaceId:  []uint8{1, 1, 1, 1, 1, 1, 1, 1},
+						Data:         []uint8{1},
+						ShareVersion: 0x1,
+					},
+					{
+						NamespaceId:  []uint8{2, 2, 2, 2, 2, 2, 2, 2},
+						Data:         []uint8{2},
+						ShareVersion: 0x2,
+					},
+				},
+				SquareSize: 0x0,
+				Hash:       []uint8(nil),
+			},
+			data: Data{
+				Txs: []Tx{},
+				Blobs: []Blob{
+					{
+						NamespaceID:  []byte{1, 1, 1, 1, 1, 1, 1, 1},
+						Data:         []byte{1},
+						ShareVersion: 1,
+					},
+					{
+						NamespaceID:  []byte{2, 2, 2, 2, 2, 2, 2, 2},
+						Data:         []byte{2},
+						ShareVersion: 2,
+					},
+				},
+				SquareSize: 0,
+			},
+		},
+		{
+			name: "one blob with too large of a share version",
+			proto: &tmproto.Data{
+				Txs: [][]uint8(nil),
+				Blobs: []tmproto.Blob{
+					{
+						NamespaceId:  []uint8{1, 2, 3, 4, 5, 6, 7, 8},
+						Data:         []uint8{1},
+						ShareVersion: 257, // does not fit in a uint8
+					},
+				},
+				SquareSize: 0x0,
+				Hash:       []uint8(nil),
+			},
+			data:    Data{},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := DataFromProto(tc.proto)
+			if tc.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.Equal(t, tc.data, got)
+
+			proto := tc.data.ToProto()
+			assert.Equal(t, tc.proto, &proto)
+		})
+	}
 }

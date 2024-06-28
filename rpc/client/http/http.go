@@ -416,6 +416,19 @@ func (c *baseRPCClient) Block(ctx context.Context, height *int64) (*ctypes.Resul
 	return result, nil
 }
 
+func (c *baseRPCClient) SignedBlock(ctx context.Context, height *int64) (*ctypes.ResultSignedBlock, error) {
+	result := new(ctypes.ResultSignedBlock)
+	params := make(map[string]interface{})
+	if height != nil {
+		params["height"] = height
+	}
+	_, err := c.caller.Call(ctx, "signed_block", params, result)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (c *baseRPCClient) BlockByHash(ctx context.Context, hash []byte) (*ctypes.ResultBlock, error) {
 	result := new(ctypes.ResultBlock)
 	params := map[string]interface{}{
@@ -457,6 +470,46 @@ func (c *baseRPCClient) Commit(ctx context.Context, height *int64) (*ctypes.Resu
 	return result, nil
 }
 
+func (c *baseRPCClient) DataCommitment(
+	ctx context.Context,
+	firstBlock uint64,
+	lastBlock uint64,
+) (*ctypes.ResultDataCommitment, error) {
+	result := new(ctypes.ResultDataCommitment)
+	params := map[string]interface{}{
+		"firstBlock": firstBlock,
+		"lastBlock":  lastBlock,
+	}
+
+	_, err := c.caller.Call(ctx, "data_commitment", params, result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func (c *baseRPCClient) DataRootInclusionProof(
+	ctx context.Context,
+	height uint64,
+	firstBlock uint64,
+	lastBlock uint64,
+) (*ctypes.ResultDataRootInclusionProof, error) {
+	result := new(ctypes.ResultDataRootInclusionProof)
+	params := map[string]interface{}{
+		"height":     height,
+		"firstBlock": firstBlock,
+		"lastBlock":  lastBlock,
+	}
+
+	_, err := c.caller.Call(ctx, "data_root_inclusion_proof", params, result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
 func (c *baseRPCClient) Tx(ctx context.Context, hash []byte, prove bool) (*ctypes.ResultTx, error) {
 	result := new(ctypes.ResultTx)
 	params := map[string]interface{}{
@@ -468,6 +521,25 @@ func (c *baseRPCClient) Tx(ctx context.Context, hash []byte, prove bool) (*ctype
 		return nil, err
 	}
 	return result, nil
+}
+
+func (c *baseRPCClient) ProveShares(
+	ctx context.Context,
+	height uint64,
+	startShare uint64,
+	endShare uint64,
+) (types.ShareProof, error) {
+	result := new(types.ShareProof)
+	params := map[string]interface{}{
+		"height":     height,
+		"startShare": startShare,
+		"endShare":   endShare,
+	}
+	_, err := c.caller.Call(ctx, "prove_shares", params, result)
+	if err != nil {
+		return types.ShareProof{}, err
+	}
+	return *result, nil
 }
 
 func (c *baseRPCClient) TxSearch(

@@ -91,6 +91,8 @@ func (blockExec *BlockExecutor) SetEventBus(eventBus types.BlockEventPublisher) 
 // and txs from the mempool. The max bytes must be big enough to fit the commit.
 // Up to 1/10th of the block space is allcoated for maximum sized evidence.
 // The rest is given to txs, up to the max gas.
+//
+// Contract: application will not return more bytes than are sent over the wire.
 func (blockExec *BlockExecutor) CreateProposalBlock(
 	height int64,
 	state State, commit *types.Commit,
@@ -105,9 +107,74 @@ func (blockExec *BlockExecutor) CreateProposalBlock(
 	// Fetch a limited amount of valid txs
 	maxDataBytes := types.MaxDataBytes(maxBytes, evSize, state.Validators.Size())
 
+	// TODO(ismail): reaping the mempool has to happen in relation to a max
+	// allowed square size instead of (only) Gas / bytes
+	// maybe the mempool actually should track things separately
+	// meaning that CheckTx should already do the mapping:
+	// Tx -> Txs, Message
+	// https://github.com/tendermint/tendermint/issues/77
 	txs := blockExec.mempool.ReapMaxBytesMaxGas(maxDataBytes, maxGas)
 
-	return state.MakeBlock(height, txs, commit, evidence, proposerAddr)
+	preparedProposal, err := blockExec.proxyApp.PrepareProposalSync(
+		abci.RequestPrepareProposal{
+			BlockData:     &tmproto.Data{Txs: txs.ToSliceOfBytes()},
+			BlockDataSize: maxDataBytes},
+	)
+	if err != nil {
+		// The App MUST ensure that only valid (and hence 'processable') transactions
+		// enter the mempool. Hence, at this point, we can't have any non-processable
+		// transaction causing an error.
+		//
+		// Also, the App can simply skip any transaction that could cause any kind of trouble.
+		// Either way, we can not recover in a meaningful way, unless we skip proposing
+		// this block, repair what caused the error and try again. Hence, we panic on
+		// purpose for now.
+		panic(err)
+	}
+	rawNewData := preparedProposal.GetBlockData()
+	var blockDataSize int
+	for _, tx := range rawNewData.GetTxs() {
+		blockDataSize += len(tx)
+
+		if maxDataBytes < int64(blockDataSize) {
+			panic("block data exceeds max amount of allowed bytes")
+		}
+	}
+
+	newData, err := types.DataFromProto(rawNewData)
+	if err != nil {
+		// todo(evan): see if we can get rid of this panic
+		panic(err)
+	}
+
+	return state.MakeBlock(
+		height,
+		newData,
+		commit,
+		evidence,
+		proposerAddr,
+	)
+}
+
+func (blockExec *BlockExecutor) ProcessProposal(
+	block *types.Block,
+) (bool, error) {
+	pData := block.Data.ToProto()
+	req := abci.RequestProcessProposal{
+		BlockData: &pData,
+		Header:    *block.Header.ToProto(),
+	}
+
+	resp, err := blockExec.proxyApp.ProcessProposalSync(req)
+	if err != nil {
+		return false, ErrInvalidBlock(err)
+	}
+
+	if resp.IsRejected() {
+		blockExec.metrics.ProcessProposalRejected.Add(1)
+	}
+
+	return resp.IsOK(), nil
 }
 
 // ValidateBlock validates the given block against the given state.
@@ -129,7 +196,10 @@ func (blockExec *BlockExecutor) ValidateBlock(state State, block *types.Block) e
 // from outside this package to process and commit an entire block.
 // It takes a blockID to avoid recomputing the parts hash.
 func (blockExec *BlockExecutor) ApplyBlock(
-	state State, blockID types.BlockID, block *types.Block,
+	state State,
+	blockID types.BlockID,
+	block *types.Block,
+	commit *types.Commit,
 ) (State, int64, error) {
 
 	if err := validateBlock(state, block); err != nil {
@@ -197,7 +267,7 @@ func (blockExec *BlockExecutor) ApplyBlock(
 
 	// Events are fired after everything else.
 	// NOTE: if we crash between Commit and Save, events wont be fired during replay
-	fireEvents(blockExec.logger, blockExec.eventBus, block, abciResponses, validatorUpdates)
+	fireEvents(blockExec.logger, blockExec.eventBus, block, abciResponses, validatorUpdates, state.LastValidators, commit)
 
 	return state, retainHeight, nil
 }
@@ -474,6 +544,8 @@ func fireEvents(
 	block *types.Block,
 	abciResponses *tmstate.ABCIResponses,
 	validatorUpdates []*types.Validator,
+	currentValidatorSet *types.ValidatorSet,
+	seenCommit *types.Commit,
 ) {
 	if err := eventBus.PublishEventNewBlock(types.EventDataNewBlock{
 		Block:            block,
@@ -481,6 +553,18 @@ func fireEvents(
 		ResultEndBlock:   *abciResponses.EndBlock,
 	}); err != nil {
 		logger.Error("failed publishing new block", "err", err)
+	}
+
+	if seenCommit != nil {
+		err := eventBus.PublishEventNewSignedBlock(types.EventDataSignedBlock{
+			Header:       block.Header,
+			Commit:       *seenCommit,
+			ValidatorSet: *currentValidatorSet,
+			Data:         block.Data,
+		})
+		if err != nil {
+			logger.Error("failed publishing new signed block", "err", err)
+		}
 	}
 
 	if err := eventBus.PublishEventNewBlockHeader(types.EventDataNewBlockHeader{

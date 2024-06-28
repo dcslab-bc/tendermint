@@ -664,9 +664,9 @@ func (cs *State) updateToState(state sm.State) {
 	cs.LockedRound = -1
 	cs.LockedBlock = nil
 	cs.LockedBlockParts = nil
-	cs.ValidRound = -1
-	cs.ValidBlock = nil
-	cs.ValidBlockParts = nil
+	cs.TwoThirdPrevoteRound = -1
+	cs.TwoThirdPrevoteBlock = nil
+	cs.TwoThirdPrevoteBlockParts = nil
 	cs.Votes = cstypes.NewHeightVoteSet(state.ChainID, height, validators)
 	cs.CommitRound = -1
 	cs.LastValidators = state.LastValidators
@@ -1126,9 +1126,9 @@ func (cs *State) defaultDecideProposal(height int64, round int32) {
 	var blockParts *types.PartSet
 
 	// Decide on block
-	if cs.ValidBlock != nil {
+	if cs.TwoThirdPrevoteBlock != nil {
 		// If there is valid block, choose that.
-		block, blockParts = cs.ValidBlock, cs.ValidBlockParts
+		block, blockParts = cs.TwoThirdPrevoteBlock, cs.TwoThirdPrevoteBlockParts
 	} else {
 		// Create a new proposal block from state/txs from the mempool.
 		block, blockParts = cs.createProposalBlock()
@@ -1145,7 +1145,7 @@ func (cs *State) defaultDecideProposal(height int64, round int32) {
 
 	// Make proposal
 	propBlockID := types.BlockID{Hash: block.Hash(), PartSetHeader: blockParts.Header()}
-	proposal := types.NewProposal(height, round, cs.ValidRound, propBlockID)
+	proposal := types.NewProposal(height, round, cs.TwoThirdPrevoteRound, propBlockID)
 	p := proposal.ToProto()
 	if err := cs.privValidator.SignProposal(cs.state.ChainID, p); err == nil {
 		proposal.Signature = p.Signature
@@ -1271,6 +1271,19 @@ func (cs *State) defaultDoPrevote(height int64, round int32) {
 	if err != nil {
 		// ProposalBlock is invalid, prevote nil.
 		logger.Error("prevote step: ProposalBlock is invalid", "err", err)
+		cs.signAddVote(tmproto.PrevoteType, nil, types.PartSetHeader{})
+		return
+	}
+
+	stateMachineValidBlock, err := cs.blockExec.ProcessProposal(cs.ProposalBlock)
+	if err != nil {
+		cs.Logger.Error("state machine returned an error when trying to process proposal block", "err", err)
+	}
+
+	// Vote nil if application invalidated the block
+	if !stateMachineValidBlock {
+		// The app says we must vote nil
+		logger.Error("prevote step: the application deems this block to be mustVoteNil", "err", err)
 		cs.signAddVote(tmproto.PrevoteType, nil, types.PartSetHeader{})
 		return
 	}
@@ -1605,11 +1618,12 @@ func (cs *State) finalizeCommit(height int64) {
 	fail.Fail() // XXX
 
 	// Save to blockStore.
+	var seenCommit *types.Commit
 	if cs.blockStore.Height() < block.Height {
 		// NOTE: the seenCommit is local justification to commit this block,
 		// but may differ from the LastCommit included in the next block
 		precommits := cs.Votes.Precommits(cs.CommitRound)
-		seenCommit := precommits.MakeCommit()
+		seenCommit = precommits.MakeCommit()
 		cs.blockStore.SaveBlock(block, blockParts, seenCommit)
 	} else {
 		// Happens during replay if we already saved the block but didn't commit
@@ -1658,6 +1672,7 @@ func (cs *State) finalizeCommit(height int64) {
 			PartSetHeader: blockParts.Header(),
 		},
 		block,
+		seenCommit,
 	)
 	if err != nil {
 		logger.Error("failed to apply block", "err", err)
@@ -1912,7 +1927,7 @@ func (cs *State) handleCompleteProposal(blockHeight int64) {
 	// Update Valid* if we can.
 	prevotes := cs.Votes.Prevotes(cs.Round)
 	blockID, hasTwoThirds := prevotes.TwoThirdsMajority()
-	if hasTwoThirds && !blockID.IsZero() && (cs.ValidRound < cs.Round) {
+	if hasTwoThirds && !blockID.IsZero() && (cs.TwoThirdPrevoteRound < cs.Round) {
 		if cs.ProposalBlock.HashesTo(blockID.Hash) {
 			cs.Logger.Debug(
 				"updating valid block to new proposal block",
@@ -1920,9 +1935,9 @@ func (cs *State) handleCompleteProposal(blockHeight int64) {
 				"valid_block_hash", log.NewLazyBlockHash(cs.ProposalBlock),
 			)
 
-			cs.ValidRound = cs.Round
-			cs.ValidBlock = cs.ProposalBlock
-			cs.ValidBlockParts = cs.ProposalBlockParts
+			cs.TwoThirdPrevoteRound = cs.Round
+			cs.TwoThirdPrevoteBlock = cs.ProposalBlock
+			cs.TwoThirdPrevoteBlockParts = cs.ProposalBlockParts
 		}
 		// TODO: In case there is +2/3 majority in Prevotes set for some
 		// block and cs.ProposalBlock contains different block, either
@@ -2082,12 +2097,18 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID) (added bool, err error
 
 			// Update Valid* if we can.
 			// NOTE: our proposal block may be nil or not what received a polka..
-			if len(blockID.Hash) != 0 && (cs.ValidRound < vote.Round) && (vote.Round == cs.Round) {
+			if len(blockID.Hash) != 0 && (cs.TwoThirdPrevoteRound < vote.Round) && (vote.Round == cs.Round) {
 				if cs.ProposalBlock.HashesTo(blockID.Hash) {
-					cs.Logger.Debug("updating valid block because of POL", "valid_round", cs.ValidRound, "pol_round", vote.Round)
-					cs.ValidRound = vote.Round
-					cs.ValidBlock = cs.ProposalBlock
-					cs.ValidBlockParts = cs.ProposalBlockParts
+					cs.Logger.Debug(
+						"updating valid block because of POL",
+						"valid_round",
+						cs.TwoThirdPrevoteRound,
+						"pol_round",
+						vote.Round,
+					)
+					cs.TwoThirdPrevoteRound = vote.Round
+					cs.TwoThirdPrevoteBlock = cs.ProposalBlock
+					cs.TwoThirdPrevoteBlockParts = cs.ProposalBlockParts
 				} else {
 					cs.Logger.Debug(
 						"valid block we do not know about; set ProposalBlock=nil",

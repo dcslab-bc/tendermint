@@ -15,6 +15,7 @@ import (
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/proxy"
 	sm "github.com/tendermint/tendermint/state"
+	"github.com/tendermint/tendermint/test/factory"
 	"github.com/tendermint/tendermint/types"
 	tmtime "github.com/tendermint/tendermint/types/time"
 )
@@ -54,13 +55,19 @@ func makeAndCommitGoodBlock(
 
 func makeAndApplyGoodBlock(state sm.State, height int64, lastCommit *types.Commit, proposerAddr []byte,
 	blockExec *sm.BlockExecutor, evidence []types.Evidence) (sm.State, types.BlockID, error) {
-	block, _ := state.MakeBlock(height, makeTxs(height), lastCommit, evidence, proposerAddr)
+	block, _ := state.MakeBlock(
+		height,
+		factory.MakeData(factory.MakeTenTxs(height), nil),
+		lastCommit,
+		evidence,
+		proposerAddr,
+	)
 	if err := blockExec.ValidateBlock(state, block); err != nil {
 		return state, types.BlockID{}, err
 	}
 	blockID := types.BlockID{Hash: block.Hash(),
 		PartSetHeader: types.PartSetHeader{Total: 3, Hash: tmrand.Bytes(32)}}
-	state, _, err := blockExec.ApplyBlock(state, blockID, block)
+	state, _, err := blockExec.ApplyBlock(state, blockID, block, lastCommit)
 	if err != nil {
 		return state, types.BlockID{}, err
 	}
@@ -136,7 +143,7 @@ func makeState(nVals, height int) (sm.State, dbm.DB, map[string]types.PrivValida
 func makeBlock(state sm.State, height int64) *types.Block {
 	block, _ := state.MakeBlock(
 		height,
-		makeTxs(state.LastBlockHeight),
+		factory.MakeData(makeTxs(state.LastBlockHeight), nil),
 		new(types.Commit),
 		nil,
 		state.Validators.GetProposer().Address,
@@ -274,4 +281,13 @@ func (app *testApp) Commit() abci.ResponseCommit {
 
 func (app *testApp) Query(reqQuery abci.RequestQuery) (resQuery abci.ResponseQuery) {
 	return
+}
+
+func (app *testApp) ProcessProposal(req abci.RequestProcessProposal) abci.ResponseProcessProposal {
+	for _, tx := range req.BlockData.Txs {
+		if len(tx) == 0 {
+			return abci.ResponseProcessProposal{Result: abci.ResponseProcessProposal_REJECT}
+		}
+	}
+	return abci.ResponseProcessProposal{Result: abci.ResponseProcessProposal_ACCEPT}
 }

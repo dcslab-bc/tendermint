@@ -5,8 +5,6 @@ import (
 	"time"
 
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	tmversion "github.com/tendermint/tendermint/proto/tendermint/version"
-	"github.com/tendermint/tendermint/version"
 )
 
 func MakeCommit(blockID BlockID, height int64, round int32,
@@ -81,21 +79,12 @@ func MakeVote(
 	return vote, nil
 }
 
-// MakeBlock returns a new block with an empty header, except what can be
-// computed from itself.
-// It populates the same set of fields validated by ValidateBasic.
-func MakeBlock(height int64, txs []Tx, lastCommit *Commit, evidence []Evidence) *Block {
-	block := &Block{
-		Header: Header{
-			Version: tmversion.Consensus{Block: version.BlockProtocol, App: 0},
-			Height:  height,
-		},
-		Data: Data{
-			Txs: txs,
-		},
-		Evidence:   EvidenceData{Evidence: evidence},
-		LastCommit: lastCommit,
+func makeData(txs []Tx, blobs []Blob) Data {
+	if blobs == nil {
+		blobs = []Blob{}
 	}
-	block.fillHeader()
-	return block
+	return Data{
+		Txs:   txs,
+		Blobs: blobs,
+	}
 }

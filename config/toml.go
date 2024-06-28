@@ -343,8 +343,9 @@ dial_timeout = "{{ .P2P.DialTimeout }}"
 [mempool]
 
 # Mempool version to use:
-#   1) "v0" - (default) FIFO mempool.
-#   2) "v1" - prioritized mempool.
+#   1) "v0" - FIFO mempool.
+#   2) "v1" - (default) prioritized mempool.
+#   3) "v2" - content addressable transaction pool
 version = "{{ .Mempool.Version }}"
 
 recheck = {{ .Mempool.Recheck }}
@@ -435,8 +436,8 @@ chunk_fetchers = "{{ .StateSync.ChunkFetchers }}"
 
 # Fast Sync version to use:
 #   1) "v0" (default) - the legacy fast sync implementation
-#   2) "v1" - refactor of v0 version for better testability
-#   2) "v2" - complete redesign of v0, optimized for testability & readability
+#   "v1" and "v2" are disabled. They have been deprecated and will
+#   be completely removed in one of the upcoming releases
 version = "{{ .FastSync.Version }}"
 
 #######################################################

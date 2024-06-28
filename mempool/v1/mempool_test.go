@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tendermint/tendermint/abci/example/code"
@@ -21,6 +22,7 @@ import (
 	"github.com/tendermint/tendermint/config"
 	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/mempool"
+	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/proxy"
 	"github.com/tendermint/tendermint/types"
 )
@@ -264,7 +266,7 @@ func TestTxMempool_Eviction(t *testing.T) {
 	// Now the lowest-priority tx is 5, so that should be the next to go.
 	mustCheckTx(t, txmp, "key9=0008=9")
 	require.True(t, txExists("key9=0008=9"))
-	require.False(t, txExists("k3y2=0001=5"))
+	require.False(t, txExists("key2=0001=5"))
 
 	// Add a transaction that requires eviction of multiple lower-priority
 	// entries, in order to fit the size of the element.
@@ -651,4 +653,37 @@ func TestTxMempool_CheckTxPostCheckError(t *testing.T) {
 			require.NoError(t, txmp.CheckTx(tx, callback, mempool.TxInfo{SenderID: 0}))
 		})
 	}
+}
+
+func TestRemoveBlobTx(t *testing.T) {
+	txmp := setup(t, 500)
+
+	originalTx := []byte{1, 2, 3, 4}
+	indexWrapper, err := types.MarshalIndexWrapper(originalTx, 100)
+	require.NoError(t, err)
+
+	// create the blobTx
+	b := tmproto.Blob{
+		NamespaceId:  []byte{1, 2, 3, 4, 5, 6, 7, 8},
+		Data:         []byte{1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+		ShareVersion: 0,
+	}
+	bTx, err := types.MarshalBlobTx(originalTx, &b)
+	require.NoError(t, err)
+
+	err = txmp.CheckTx(bTx, nil, mempool.TxInfo{})
+	require.NoError(t, err)
+
+	err = txmp.Update(1, []types.Tx{indexWrapper}, abciResponses(1, abci.CodeTypeOK), nil, nil)
+	require.NoError(t, err)
+	assert.EqualValues(t, 0, txmp.Size())
+	assert.EqualValues(t, 0, txmp.SizeBytes())
+}
+
+func abciResponses(n int, code uint32) []*abci.ResponseDeliverTx {
+	responses := make([]*abci.ResponseDeliverTx, 0, n)
+	for i := 0; i < n; i++ {
+		responses = append(responses, &abci.ResponseDeliverTx{Code: code})
+	}
+	return responses
 }
