@@ -1,4 +1,4 @@
-package v1
+package v0
 
 import (
 	"errors"
@@ -23,7 +23,7 @@ import (
 type Reactor struct {
 	p2p.BaseReactor
 	config  *cfg.MempoolConfig
-	mempool *TxMempool
+	mempool *CListMempool
 	ids     *mempoolIDs
 }
 
@@ -91,7 +91,7 @@ func newMempoolIDs() *mempoolIDs {
 }
 
 // NewReactor returns a new Reactor with the given config and mempool.
-func NewReactor(config *cfg.MempoolConfig, mempool *TxMempool) *Reactor {
+func NewReactor(config *cfg.MempoolConfig, mempool *CListMempool) *Reactor {
 	memR := &Reactor{
 		config:  config,
 		mempool: mempool,

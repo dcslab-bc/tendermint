@@ -376,37 +376,8 @@ func createMempoolAndMempoolReactor(
 	logger = logger.With("module", "mempool")
 
 	switch config.Mempool.Version {
-	case cfg.MempoolV2:
-		mp := mempoolv2.NewTxPool(
-			logger,
-			config.Mempool,
-			proxyApp.Mempool(),
-			state.LastBlockHeight,
-			mempoolv2.WithMetrics(memplMetrics),
-			mempoolv2.WithPreCheck(sm.TxPreCheck(state)),
-			mempoolv2.WithPostCheck(sm.TxPostCheck(state)),
-		)
-
-		reactor, err := mempoolv2.NewReactor(
-			mp,
-			&mempoolv2.ReactorOptions{
-				ListenOnly: !config.Mempool.Broadcast,
-				MaxTxSize:  config.Mempool.MaxTxBytes,
-			},
-		)
-		if err != nil {
-			// TODO: find a more polite way of handling this error
-			panic(err)
-		}
-		if config.Consensus.WaitForTxs() {
-			mp.EnableTxsAvailable()
-		}
-		reactor.SetLogger(logger)
-
-		return mp, reactor
 	case cfg.MempoolV1:
-		mp := mempoolv1.NewTxMempool(
-			logger,
+		mp := mempoolv1.NewCListMempool(
 			config.Mempool,
 			proxyApp.Mempool(),
 			state.LastBlockHeight,
@@ -414,6 +385,7 @@ func createMempoolAndMempoolReactor(
 			mempoolv1.WithPreCheck(sm.TxPreCheck(state)),
 			mempoolv1.WithPostCheck(sm.TxPostCheck(state)),
 		)
+		mp.SetLogger(logger)
 
 		reactor := mempoolv1.NewReactor(
 			config.Mempool,

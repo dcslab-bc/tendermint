@@ -1,3 +1,7 @@
+// This file has been added for fixing a compile error.
+// The priority mempool (v1) has been deprecated in CometBFT.
+// Thus, we don't need to take care of all v2 files for now.
+
 package v0
 
 import (
@@ -243,7 +247,6 @@ func (mem *CListMempool) CheckTx(
 		// (eg. after committing a block, txs are removed from mempool but not cache),
 		// so we only record the sender for txs still in the mempool.
 		if e, ok := mem.txsMap.Load(tx.Key()); ok {
-			mem.metrics.AlreadySeenTxs.Add(1)
 			memTx := e.(*clist.CElement).Value.(*mempoolTx)
 			memTx.senders.LoadOrStore(txInfo.SenderID, true)
 			// TODO: consider punishing peer for dups,
@@ -329,9 +332,6 @@ func (mem *CListMempool) removeTx(tx types.Tx, elem *clist.CElement, removeFromC
 	mem.txs.Remove(elem)
 	elem.DetachPrev()
 	mem.txsMap.Delete(tx.Key())
-	if memtx, ok := elem.Value.(*mempoolTx); ok {
-		tx = memtx.tx
-	}
 	atomic.AddInt64(&mem.txsBytes, int64(-len(tx)))
 
 	if removeFromCache {
@@ -631,6 +631,7 @@ func (mem *CListMempool) Update(
 		if err != nil {
 			mem.logger.Error("error in proxyAppConn.BeginRecheckTxSync", "err", err)
 		}
+
 		mem.logger.Info("recheck txs", "numtxs", mem.Size(), "height", block.Height)
 		mem.recheckTxs()
 
@@ -651,13 +652,12 @@ func (mem *CListMempool) Update(
 		// just notify there're some txs left.
 		mem.notifyTxsAvailable()
 	}
-
 	// Update metrics
 	mem.metrics.Size.Set(float64(mem.Size()))
 
+	// return nil
 	return err
 }
-
 func (mem *CListMempool) recheckTxs() {
 	if mem.Size() == 0 {
 		return

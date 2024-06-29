@@ -38,6 +38,8 @@ message Request {
     RequestApplySnapshotChunk apply_snapshot_chunk = 15;
     RequestPrepareProposal    prepare_proposal     = 16;
     RequestProcessProposal    process_proposal     = 17;
+    RequestBeginRecheckTx     begin_recheck_tx     = 100; // 16~99 are reserved for merging original tendermint
+    RequestEndRecheckTx       end_recheck_tx       = 101;
   }
 }
 
@@ -140,6 +142,14 @@ message RequestProcessProposal {
   tendermint.types.Data   block_data = 2;
 }
 
+message RequestBeginRecheckTx {
+  tendermint.types.Header header = 1 [(gogoproto.nullable) = false];
+}
+
+message RequestEndRecheckTx {
+  int64 height = 1;
+}
+
 //----------------------------------------
 // Response types
 
@@ -163,6 +173,8 @@ message Response {
     ResponseApplySnapshotChunk apply_snapshot_chunk = 16;
     ResponsePrepareProposal    prepare_proposal     = 17;
     ResponseProcessProposal    process_proposal     = 18;
+    ResponseBeginRecheckTx     begin_recheck_tx     = 100; // 17~99 are reserved for merging original tendermint
+    ResponseEndRecheckTx       end_recheck_tx       = 101;
   }
 }
 
@@ -315,6 +327,14 @@ message ResponseProcessProposal {
   }
 }
 
+message ResponseBeginRecheckTx {
+  uint32 code = 1;
+}
+
+message ResponseEndRecheckTx {
+  uint32 code = 1;
+}
+
 //----------------------------------------
 // Misc.
 
@@ -443,4 +463,6 @@ service ABCIApplication {
   rpc ApplySnapshotChunk(RequestApplySnapshotChunk) returns (ResponseApplySnapshotChunk);
   rpc PrepareProposal(RequestPrepareProposal) returns (ResponsePrepareProposal);
   rpc ProcessProposal(RequestProcessProposal) returns (ResponseProcessProposal);
+  rpc BeginRecheckTx(RequestBeginRecheckTx) returns (ResponseBeginRecheckTx);
+  rpc EndRecheckTx(RequestEndRecheckTx) returns (ResponseEndRecheckTx);
 }

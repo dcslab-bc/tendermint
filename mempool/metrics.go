@@ -39,6 +39,9 @@ type Metrics struct {
 	// Number of times transactions are rechecked in the mempool.
 	RecheckTimes metrics.Counter
 
+	// Time of recheck transactions in the mempool.
+	RecheckTime metrics.Gauge
+
 	// AlreadySeenTxs defines the number of transactions that entered the
 	// mempool which were already present in the mempool. This is a good
 	// indicator of the degree of duplication in message gossiping.
@@ -105,6 +108,13 @@ func PrometheusMetrics(namespace string, labelsAndValues ...string) *Metrics {
 			Help:      "Number of times transactions are rechecked in the mempool.",
 		}, labels).With(labelsAndValues...),
 
+		RecheckTime: prometheus.NewGaugeFrom(stdprometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "recheck_time",
+			Help:      "Time of recheck transactions in the mempool in ms.",
+		}, labels).With(labelsAndValues...),
+
 		AlreadySeenTxs: prometheus.NewCounterFrom(stdprometheus.CounterOpts{
 			Namespace: namespace,
 			Subsystem: MetricsSubsystem,
@@ -137,6 +147,7 @@ func NopMetrics() *Metrics {
 		EvictedTxs:     discard.NewCounter(),
 		SuccessfulTxs:  discard.NewCounter(),
 		RecheckTimes:   discard.NewCounter(),
+		RecheckTime:    discard.NewGauge(),
 		AlreadySeenTxs: discard.NewCounter(),
 		RequestedTxs:   discard.NewCounter(),
 		RerequestedTxs: discard.NewCounter(),
