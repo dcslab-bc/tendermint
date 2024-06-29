@@ -99,6 +99,12 @@ func ToRequestDeliverTx(req RequestDeliverTx) *Request {
 	}
 }
 
+func ToRequestAnteVerifyTx(req RequestAnteVerifyTx) *Request {
+	return &Request{
+		Value: &Request_AnteVerifyTx{&req},
+	}
+}
+
 func ToRequestCheckTx(req RequestCheckTx) *Request {
 	return &Request{
 		Value: &Request_CheckTx{&req},
@@ -218,6 +224,12 @@ func ToResponseSetOption(res ResponseSetOption) *Response {
 func ToResponseDeliverTx(res ResponseDeliverTx) *Response {
 	return &Response{
 		Value: &Response_DeliverTx{&res},
+	}
+}
+
+func ToResponseAnteVerifyTx(res ResponseAnteVerifyTx) *Response {
+	return &Response{
+		Value: &Response_AnteVerifyTx{&res},
 	}
 }
 

@@ -80,6 +80,12 @@ func (app *PersistentKVStoreApplication) DeliverTx(req types.RequestDeliverTx) t
 	return app.app.DeliverTx(req)
 }
 
+// updated by mssong
+func (app *PersistentKVStoreApplication) AnteVerifyTx(req types.RequestAnteVerifyTx) types.ResponseAnteVerifyTx {
+	//todo
+	return types.ResponseAnteVerifyTx{}
+}
+
 func (app *PersistentKVStoreApplication) CheckTx(req types.RequestCheckTx) types.ResponseCheckTx {
 	return app.app.CheckTx(req)
 }

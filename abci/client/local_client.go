@@ -15,6 +15,8 @@ var _ Client = (*localClient)(nil)
 type localClient struct {
 	service.BaseService
 
+	// TODO: remove `mtx` to increase concurrency.
+	// CONTRACT: The application should protect itself from concurrency as an abci server.
 	mtx *tmsync.Mutex
 	types.Application
 	Callback
@@ -95,6 +97,21 @@ func (app *localClient) DeliverTxAsync(params types.RequestDeliverTx) *ReqRes {
 		types.ToRequestDeliverTx(params),
 		types.ToResponseDeliverTx(res),
 	)
+}
+
+// updated by mssong
+func (app *localClient) AnteVerifyTxAsync(params types.RequestAnteVerifyTx) *ReqRes {
+	//todo
+	// app.mtx.Lock()
+	// defer app.mtx.Unlock()
+
+	//mssong - here
+	res := app.Application.AnteVerifyTx(params)
+	return app.callback(
+		types.ToRequestAnteVerifyTx(params),
+		types.ToResponseAnteVerifyTx(res),
+	)
+	// return nil
 }
 
 func (app *localClient) CheckTxAsync(req types.RequestCheckTx) *ReqRes {
