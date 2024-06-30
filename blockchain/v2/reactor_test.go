@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	dbm "github.com/cometbft/cometbft-db"
 	"github.com/gogo/protobuf/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	dbm "github.com/tendermint/tm-db"
 
 	abci "github.com/tendermint/tendermint/abci/types"
 	"github.com/tendermint/tendermint/behaviour"
@@ -25,9 +25,10 @@ import (
 	bcproto "github.com/tendermint/tendermint/proto/tendermint/blockchain"
 	"github.com/tendermint/tendermint/proxy"
 	sm "github.com/tendermint/tendermint/state"
+	"github.com/tendermint/tendermint/state/test/factory"
 	"github.com/tendermint/tendermint/store"
 	"github.com/tendermint/tendermint/types"
-	tmtime "github.com/tendermint/tendermint/types/time"
+	cmttime "github.com/tendermint/tendermint/types/time"
 )
 
 type mockPeer struct {
@@ -69,7 +70,7 @@ type mockBlockApplier struct{}
 
 // XXX: Add whitelist/blacklist?
 func (mba *mockBlockApplier) ApplyBlock(
-	state sm.State, blockID types.BlockID, block *types.Block,
+	state sm.State, blockID types.BlockID, block *types.Block, seenCommit *types.Commit,
 ) (sm.State, int64, error) {
 	state.LastBlockHeight++
 	return state, 0, nil
@@ -470,7 +471,13 @@ func makeTxs(height int64) (txs []types.Tx) {
 }
 
 func makeBlock(height int64, state sm.State, lastCommit *types.Commit) *types.Block {
-	block, _ := state.MakeBlock(height, makeTxs(height), lastCommit, nil, state.Validators.GetProposer().Address)
+	block, _ := state.MakeBlock(
+		height,
+		factory.MakeData(makeTxs(height)),
+		lastCommit,
+		nil,
+		state.Validators.GetProposer().Address,
+	)
 	return block
 }
 
@@ -494,7 +501,7 @@ func randGenesisDoc(chainID string, numValidators int, randPower bool, minPower 
 	sort.Sort(types.PrivValidatorsByAddress(privValidators))
 
 	return &types.GenesisDoc{
-		GenesisTime: tmtime.Now(),
+		GenesisTime: cmttime.Now(),
 		ChainID:     chainID,
 		Validators:  validators,
 	}, privValidators
@@ -565,7 +572,7 @@ func newReactorStore(
 		thisParts := thisBlock.MakePartSet(types.BlockPartSizeBytes)
 		blockID := types.BlockID{Hash: thisBlock.Hash(), PartSetHeader: thisParts.Header()}
 
-		state, _, err = blockExec.ApplyBlock(state, blockID, thisBlock)
+		state, _, err = blockExec.ApplyBlock(state, blockID, thisBlock, lastCommit)
 		if err != nil {
 			panic(fmt.Errorf("error apply block: %w", err))
 		}

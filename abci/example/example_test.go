@@ -12,11 +12,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"golang.org/x/net/context"
 
 	"github.com/tendermint/tendermint/libs/log"
-	tmnet "github.com/tendermint/tendermint/libs/net"
+	cmtnet "github.com/tendermint/tendermint/libs/net"
 
 	abcicli "github.com/tendermint/tendermint/abci/client"
 	"github.com/tendermint/tendermint/abci/example/code"
@@ -125,7 +126,7 @@ func testStream(t *testing.T, app types.Application) {
 // test grpc
 
 func dialerFunc(ctx context.Context, addr string) (net.Conn, error) {
-	return tmnet.Connect(addr)
+	return cmtnet.Connect(addr)
 }
 
 func testGRPCSync(t *testing.T, app types.ABCIApplicationServer) {
@@ -148,8 +149,7 @@ func testGRPCSync(t *testing.T, app types.ABCIApplicationServer) {
 	})
 
 	// Connect to the socket
-	//nolint:staticcheck // SA1019 Existing use of deprecated but supported dial option.
-	conn, err := grpc.Dial(socket, grpc.WithInsecure(), grpc.WithContextDialer(dialerFunc))
+	conn, err := grpc.Dial(socket, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(dialerFunc))
 	if err != nil {
 		t.Fatalf("Error dialing GRPC server: %v", err.Error())
 	}

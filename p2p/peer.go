@@ -12,11 +12,10 @@ import (
 	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/libs/service"
 
-	tmconn "github.com/tendermint/tendermint/p2p/conn"
+	cmtconn "github.com/tendermint/tendermint/p2p/conn"
 )
 
 //go:generate ../scripts/mockery_generate.sh Peer
-
 const metricsTickerDuration = 10 * time.Second
 
 // Peer is an interface representing a peer connected on a reactor.
@@ -34,7 +33,7 @@ type Peer interface {
 	CloseConn() error // close original connection
 
 	NodeInfo() NodeInfo // peer's info
-	Status() tmconn.ConnectionStatus
+	Status() cmtconn.ConnectionStatus
 	SocketAddr() *NetAddress // actual address of the socket
 
 	// Deprecated: entities looking to act as peers should implement SendEnvelope instead.
@@ -87,7 +86,7 @@ func SendEnvelopeShim(p Peer, e Envelope, lg log.Logger) bool {
 // Deprecated: Will be removed in v0.37.
 func TrySendEnvelopeShim(p Peer, e Envelope, lg log.Logger) bool {
 	if es, ok := p.(EnvelopeSender); ok {
-		return es.SendEnvelope(e)
+		return es.TrySendEnvelope(e)
 	}
 	msg := e.Message
 	if w, ok := msg.(Wrapper); ok {
@@ -132,7 +131,7 @@ func newPeerConn(
 // ID only exists for SecretConnection.
 // NOTE: Will panic if conn is not *SecretConnection.
 func (pc peerConn) ID() ID {
-	return PubKeyToID(pc.conn.(*tmconn.SecretConnection).RemotePubKey())
+	return PubKeyToID(pc.conn.(*cmtconn.SecretConnection).RemotePubKey())
 }
 
 // Return the IP from the connection RemoteAddr
@@ -164,7 +163,7 @@ type peer struct {
 
 	// raw peerConn and the multiplex connection
 	peerConn
-	mconn *tmconn.MConnection
+	mconn *cmtconn.MConnection
 
 	// peer's node info and the channel it knows about
 	// channels = nodeInfo.Channels
@@ -187,11 +186,11 @@ type PeerOption func(*peer)
 
 func newPeer(
 	pc peerConn,
-	mConfig tmconn.MConnConfig,
+	mConfig cmtconn.MConnConfig,
 	nodeInfo NodeInfo,
 	reactorsByCh map[byte]Reactor,
 	msgTypeByChID map[byte]proto.Message,
-	chDescs []*tmconn.ChannelDescriptor,
+	chDescs []*cmtconn.ChannelDescriptor,
 	onPeerError func(Peer, interface{}),
 	mlc *metricsLabelCache,
 	options ...PeerOption,
@@ -305,7 +304,7 @@ func (p *peer) SocketAddr() *NetAddress {
 }
 
 // Status returns the peer's ConnectionStatus.
-func (p *peer) Status() tmconn.ConnectionStatus {
+func (p *peer) Status() cmtconn.ConnectionStatus {
 	return p.mconn.Status()
 }
 
@@ -332,7 +331,12 @@ func (p *peer) SendEnvelope(e Envelope) bool {
 	}
 	res := p.Send(e.ChannelID, msgBytes)
 	if res {
-		p.metrics.MessageSendBytesTotal.With("message_type", metricLabelValue).Add(float64(len(msgBytes)))
+		labels := []string{
+			"message_type", metricLabelValue,
+			"chID", fmt.Sprintf("%#x", e.ChannelID),
+			"peer_id", string(p.ID()),
+		}
+		p.metrics.MessageSendBytesTotal.With(labels...).Add(float64(len(msgBytes)))
 	}
 	return res
 }
@@ -381,7 +385,12 @@ func (p *peer) TrySendEnvelope(e Envelope) bool {
 	}
 	res := p.TrySend(e.ChannelID, msgBytes)
 	if res {
-		p.metrics.MessageSendBytesTotal.With("message_type", metricLabelValue).Add(float64(len(msgBytes)))
+		labels := []string{
+			"message_type", metricLabelValue,
+			"chID", fmt.Sprintf("%#x", e.ChannelID),
+			"peer_id", string(p.ID()),
+		}
+		p.metrics.MessageSendBytesTotal.With(labels...).Add(float64(len(msgBytes)))
 	}
 	return res
 }
@@ -504,10 +513,10 @@ func createMConnection(
 	p *peer,
 	reactorsByCh map[byte]Reactor,
 	msgTypeByChID map[byte]proto.Message,
-	chDescs []*tmconn.ChannelDescriptor,
+	chDescs []*cmtconn.ChannelDescriptor,
 	onPeerError func(Peer, interface{}),
-	config tmconn.MConnConfig,
-) *tmconn.MConnection {
+	config cmtconn.MConnConfig,
+) *cmtconn.MConnection {
 
 	onReceive := func(chID byte, msgBytes []byte) {
 		reactor := reactorsByCh[chID]
@@ -522,18 +531,21 @@ func createMConnection(
 		if err != nil {
 			panic(fmt.Errorf("unmarshaling message: %s into type: %s", err, reflect.TypeOf(mt)))
 		}
-		labels := []string{
-			"peer_id", string(p.ID()),
-			"chID", fmt.Sprintf("%#x", chID),
-		}
+
 		if w, ok := msg.(Unwrapper); ok {
 			msg, err = w.Unwrap()
 			if err != nil {
 				panic(fmt.Errorf("unwrapping message: %s", err))
 			}
 		}
+
+		labels := []string{
+			"peer_id", string(p.ID()),
+			"chID", fmt.Sprintf("%#x", chID),
+		}
+
 		p.metrics.PeerReceiveBytesTotal.With(labels...).Add(float64(len(msgBytes)))
-		p.metrics.MessageReceiveBytesTotal.With("message_type", p.mlc.ValueToMetricLabel(msg)).Add(float64(len(msgBytes)))
+		p.metrics.MessageReceiveBytesTotal.With(append(labels, "message_type", p.mlc.ValueToMetricLabel(msg))...).Add(float64(len(msgBytes)))
 		if nr, ok := reactor.(EnvelopeReceiver); ok {
 			nr.ReceiveEnvelope(Envelope{
 				ChannelID: chID,
@@ -549,7 +561,7 @@ func createMConnection(
 		onPeerError(p, r)
 	}
 
-	return tmconn.NewMConnectionWithConfig(
+	return cmtconn.NewMConnectionWithConfig(
 		conn,
 		chDescs,
 		onReceive,

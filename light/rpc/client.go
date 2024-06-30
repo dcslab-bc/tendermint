@@ -12,8 +12,8 @@ import (
 
 	abci "github.com/tendermint/tendermint/abci/types"
 	"github.com/tendermint/tendermint/crypto/merkle"
-	tmbytes "github.com/tendermint/tendermint/libs/bytes"
-	tmmath "github.com/tendermint/tendermint/libs/math"
+	cmtbytes "github.com/tendermint/tendermint/libs/bytes"
+	cmtmath "github.com/tendermint/tendermint/libs/math"
 	service "github.com/tendermint/tendermint/libs/service"
 	rpcclient "github.com/tendermint/tendermint/rpc/client"
 	ctypes "github.com/tendermint/tendermint/rpc/core/types"
@@ -125,12 +125,12 @@ func (c *Client) ABCIInfo(ctx context.Context) (*ctypes.ResultABCIInfo, error) {
 }
 
 // ABCIQuery requests proof by default.
-func (c *Client) ABCIQuery(ctx context.Context, path string, data tmbytes.HexBytes) (*ctypes.ResultABCIQuery, error) {
+func (c *Client) ABCIQuery(ctx context.Context, path string, data cmtbytes.HexBytes) (*ctypes.ResultABCIQuery, error) {
 	return c.ABCIQueryWithOptions(ctx, path, data, rpcclient.DefaultABCIQueryOptions)
 }
 
 // ABCIQueryWithOptions returns an error if opts.Prove is false.
-func (c *Client) ABCIQueryWithOptions(ctx context.Context, path string, data tmbytes.HexBytes,
+func (c *Client) ABCIQueryWithOptions(ctx context.Context, path string, data cmtbytes.HexBytes,
 	opts rpcclient.ABCIQueryOptions) (*ctypes.ResultABCIQuery, error) {
 
 	// always request the proof
@@ -343,6 +343,52 @@ func (c *Client) Block(ctx context.Context, height *int64) (*ctypes.ResultBlock,
 	return res, nil
 }
 
+// SignedBlock calls rpcclient#SignedBlock and then verifies the result.
+func (c *Client) SignedBlock(ctx context.Context, height *int64) (*ctypes.ResultSignedBlock, error) {
+	res, err := c.next.SignedBlock(ctx, height)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate res.
+	if err := res.Header.ValidateBasic(); err != nil {
+		return nil, err
+	}
+	if height != nil && res.Header.Height != *height {
+		return nil, fmt.Errorf("incorrect height returned. Expected %d, got %d", *height, res.Header.Height)
+	}
+	if err := res.Commit.ValidateBasic(); err != nil {
+		return nil, err
+	}
+	if err := res.ValidatorSet.ValidateBasic(); err != nil {
+		return nil, err
+	}
+
+	// NOTE: this will re-request the header and commit from the primary. Ideally, you'd just
+	// fetch the data from the primary and use the light client to verify it.
+	l, err := c.updateLightClientIfNeededTo(ctx, &res.Header.Height)
+	if err != nil {
+		return nil, err
+	}
+
+	if bmH, bH := l.Header.Hash(), res.Header.Hash(); !bytes.Equal(bmH, bH) {
+		return nil, fmt.Errorf("light client header %X does not match with response header %X",
+			bmH, bH)
+	}
+
+	if bmH, bH := l.Header.DataHash, res.Data.Hash(); !bytes.Equal(bmH, bH) {
+		return nil, fmt.Errorf("light client data hash %X does not match with response data %X",
+			bmH, bH)
+	}
+
+	return &ctypes.ResultSignedBlock{
+		Header:       res.Header,
+		Commit:       *l.Commit,
+		ValidatorSet: *l.ValidatorSet,
+		Data:         res.Data,
+	}, nil
+}
+
 // BlockByHash calls rpcclient#BlockByHash and then verifies the result.
 func (c *Client) BlockByHash(ctx context.Context, hash []byte) (*ctypes.ResultBlock, error) {
 	res, err := c.next.BlockByHash(ctx, hash)
@@ -441,6 +487,40 @@ func (c *Client) BlockResults(ctx context.Context, height *int64) (*ctypes.Resul
 	return res, nil
 }
 
+// Header fetches and verifies the header directly via the light client
+func (c *Client) Header(ctx context.Context, height *int64) (*ctypes.ResultHeader, error) {
+	lb, err := c.updateLightClientIfNeededTo(ctx, height)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ctypes.ResultHeader{Header: lb.Header}, nil
+}
+
+// HeaderByHash calls rpcclient#HeaderByHash and updates the client if it's falling behind.
+func (c *Client) HeaderByHash(ctx context.Context, hash cmtbytes.HexBytes) (*ctypes.ResultHeader, error) {
+	res, err := c.next.HeaderByHash(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := res.Header.ValidateBasic(); err != nil {
+		return nil, err
+	}
+
+	lb, err := c.updateLightClientIfNeededTo(ctx, &res.Header.Height)
+	if err != nil {
+		return nil, err
+	}
+
+	if !bytes.Equal(lb.Header.Hash(), res.Header.Hash()) {
+		return nil, fmt.Errorf("primary header hash does not match trusted header hash. (%X != %X)",
+			lb.Header.Hash(), res.Header.Hash())
+	}
+
+	return res, nil
+}
+
 func (c *Client) Commit(ctx context.Context, height *int64) (*ctypes.ResultCommit, error) {
 	// Update the light client if we're behind and retrieve the light block at the requested height
 	// or at the latest height if no height is provided.
@@ -453,6 +533,26 @@ func (c *Client) Commit(ctx context.Context, height *int64) (*ctypes.ResultCommi
 		SignedHeader:    *l.SignedHeader,
 		CanonicalCommit: true,
 	}, nil
+}
+
+func (c *Client) DataCommitment(
+	ctx context.Context,
+	start uint64,
+	end uint64,
+) (*ctypes.ResultDataCommitment, error) {
+	return c.next.DataCommitment(ctx, start, end)
+}
+
+// DataRootInclusionProof calls rpcclient#DataRootInclusionProof method and returns
+// a merkle proof for the data root of block height `height` to the set of blocks
+// defined by `start` and `end`.
+func (c *Client) DataRootInclusionProof(
+	ctx context.Context,
+	height uint64,
+	start uint64,
+	end uint64,
+) (*ctypes.ResultDataRootInclusionProof, error) {
+	return c.next.DataRootInclusionProof(ctx, height, start, end)
 }
 
 // Tx calls rpcclient#Tx method and then verifies the proof if such was
@@ -476,6 +576,19 @@ func (c *Client) Tx(ctx context.Context, hash []byte, prove bool) (*ctypes.Resul
 
 	// Validate the proof.
 	return res, res.Proof.Validate(l.DataHash)
+}
+
+// ProveShares calls rpcclient#ProveShares method and returns an NMT proof for a set
+// of shares, defined by `startShare` and `endShare`, to the corresponding rows.
+// Then, a binary merkle inclusion proof from the latter rows to the data root.
+func (c *Client) ProveShares(
+	ctx context.Context,
+	height uint64,
+	startShare uint64,
+	endShare uint64,
+) (types.ShareProof, error) {
+	res, err := c.next.ProveShares(ctx, height, startShare, endShare)
+	return res, err
 }
 
 func (c *Client) TxSearch(
@@ -519,7 +632,7 @@ func (c *Client) Validators(
 	}
 
 	skipCount := validateSkipCount(page, perPage)
-	v := l.ValidatorSet.Validators[skipCount : skipCount+tmmath.MinInt(perPage, totalCount-skipCount)]
+	v := l.ValidatorSet.Validators[skipCount : skipCount+cmtmath.MinInt(perPage, totalCount-skipCount)]
 
 	return &ctypes.ResultValidators{
 		BlockHeight: l.Height,
@@ -556,7 +669,7 @@ func (c *Client) updateLightClientIfNeededTo(ctx context.Context, height *int64)
 		l, err = c.lc.VerifyLightBlockAtHeight(ctx, *height, time.Now())
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to update light client to %d: %w", height, err)
+		return nil, fmt.Errorf("failed to update light client to %d: %w", *height, err)
 	}
 	return l, nil
 }

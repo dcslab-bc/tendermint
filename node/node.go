@@ -10,10 +10,12 @@ import (
 	"strings"
 	"time"
 
+	dbm "github.com/cometbft/cometbft-db"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/pyroscope-io/client/pyroscope"
 	"github.com/rs/cors"
-	dbm "github.com/tendermint/tm-db"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	abci "github.com/tendermint/tendermint/abci/types"
 	bcv0 "github.com/tendermint/tendermint/blockchain/v0"
@@ -23,13 +25,15 @@ import (
 	cs "github.com/tendermint/tendermint/consensus"
 	"github.com/tendermint/tendermint/crypto"
 	"github.com/tendermint/tendermint/evidence"
+	"github.com/tendermint/tendermint/pkg/trace"
 
-	tmjson "github.com/tendermint/tendermint/libs/json"
+	cmtjson "github.com/tendermint/tendermint/libs/json"
 	"github.com/tendermint/tendermint/libs/log"
-	tmpubsub "github.com/tendermint/tendermint/libs/pubsub"
+	cmtpubsub "github.com/tendermint/tendermint/libs/pubsub"
 	"github.com/tendermint/tendermint/libs/service"
 	"github.com/tendermint/tendermint/light"
 	mempl "github.com/tendermint/tendermint/mempool"
+	mempoolv2 "github.com/tendermint/tendermint/mempool/cat"
 	mempoolv0 "github.com/tendermint/tendermint/mempool/v0"
 	mempoolv1 "github.com/tendermint/tendermint/mempool/v1"
 	"github.com/tendermint/tendermint/p2p"
@@ -50,7 +54,7 @@ import (
 	"github.com/tendermint/tendermint/statesync"
 	"github.com/tendermint/tendermint/store"
 	"github.com/tendermint/tendermint/types"
-	tmtime "github.com/tendermint/tendermint/types/time"
+	cmttime "github.com/tendermint/tendermint/types/time"
 	"github.com/tendermint/tendermint/version"
 
 	_ "net/http/pprof" //nolint: gosec // securely exposed on separate, optional port
@@ -94,7 +98,7 @@ func DefaultGenesisDocProviderFunc(config *cfg.Config) GenesisDocProvider {
 // Provider takes a config and a logger and returns a ready to go Node.
 type Provider func(*cfg.Config, log.Logger) (*Node, error)
 
-// DefaultNewNode returns a Tendermint node with default settings for the
+// DefaultNewNode returns a CometBFT node with default settings for the
 // PrivValidator, ClientCreator, GenesisDoc, and DBProvider.
 // It implements NodeProvider.
 func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
@@ -115,17 +119,17 @@ func DefaultNewNode(config *cfg.Config, logger log.Logger) (*Node, error) {
 }
 
 // MetricsProvider returns a consensus, p2p and mempool Metrics.
-type MetricsProvider func(chainID string) (*cs.Metrics, *p2p.Metrics, *mempl.Metrics, *sm.Metrics)
+type MetricsProvider func(chainID, softwareVersion string) (*cs.Metrics, *p2p.Metrics, *mempl.Metrics, *sm.Metrics)
 
 // DefaultMetricsProvider returns Metrics build using Prometheus client library
 // if Prometheus is enabled. Otherwise, it returns no-op Metrics.
 func DefaultMetricsProvider(config *cfg.InstrumentationConfig) MetricsProvider {
-	return func(chainID string) (*cs.Metrics, *p2p.Metrics, *mempl.Metrics, *sm.Metrics) {
+	return func(chainID, softwareVersion string) (*cs.Metrics, *p2p.Metrics, *mempl.Metrics, *sm.Metrics) {
 		if config.Prometheus {
-			return cs.PrometheusMetrics(config.Namespace, "chain_id", chainID),
-				p2p.PrometheusMetrics(config.Namespace, "chain_id", chainID),
-				mempl.PrometheusMetrics(config.Namespace, "chain_id", chainID),
-				sm.PrometheusMetrics(config.Namespace, "chain_id", chainID)
+			return cs.PrometheusMetrics(config.Namespace, "chain_id", chainID, "version", softwareVersion),
+				p2p.PrometheusMetrics(config.Namespace, "chain_id", chainID, "version", softwareVersion),
+				mempl.PrometheusMetrics(config.Namespace, "chain_id", chainID, "version", softwareVersion),
+				sm.PrometheusMetrics(config.Namespace, "chain_id", chainID, "version", softwareVersion)
 		}
 		return cs.NopMetrics(), p2p.NopMetrics(), mempl.NopMetrics(), sm.NopMetrics()
 	}
@@ -191,7 +195,7 @@ func StateProvider(stateProvider statesync.StateProvider) Option {
 
 //------------------------------------------------------------------------------
 
-// Node is the highest level interface to a full Tendermint node.
+// Node is the highest level interface to a full CometBFT node.
 // It includes all configuration information and running services.
 type Node struct {
 	service.BaseService
@@ -230,6 +234,9 @@ type Node struct {
 	blockIndexer      indexer.BlockIndexer
 	indexerService    *txindex.IndexerService
 	prometheusSrv     *http.Server
+	influxDBClient    *trace.Client
+	pyroscopeProfiler *pyroscope.Profiler
+	pyroscopeTracer   *sdktrace.TracerProvider
 }
 
 func initDBs(config *cfg.Config, dbProvider DBProvider) (blockStore *store.BlockStore, stateDB dbm.DB, err error) {
@@ -315,6 +322,7 @@ func createAndStartIndexerService(
 }
 
 func doHandshake(
+	ctx context.Context,
 	stateStore sm.Store,
 	state sm.State,
 	blockStore sm.BlockStore,
@@ -322,22 +330,21 @@ func doHandshake(
 	eventBus types.BlockEventPublisher,
 	proxyApp proxy.AppConns,
 	consensusLogger log.Logger,
-) error {
+) (string, error) {
 	handshaker := cs.NewHandshaker(stateStore, state, blockStore, genDoc)
 	handshaker.SetLogger(consensusLogger)
 	handshaker.SetEventBus(eventBus)
-	if err := handshaker.Handshake(proxyApp); err != nil {
-		return fmt.Errorf("error during handshake: %v", err)
-	}
-	return nil
+	return handshaker.Handshake(proxyApp)
 }
 
 func logNodeStartupInfo(state sm.State, pubKey crypto.PubKey, logger, consensusLogger log.Logger) {
 	// Log the version info.
 	logger.Info("Version info",
-		"tendermint_version", version.TMCoreSemVer,
+		"cmtbft_version", version.TMCoreSemVer,
+		"abci", version.ABCISemVer,
 		"block", version.BlockProtocol,
 		"p2p", version.P2PProtocol,
+		"commit_hash", version.TMGitCommitHash,
 	)
 
 	// If the state and software differ in block version, at least log it.
@@ -371,8 +378,38 @@ func createMempoolAndMempoolReactor(
 	state sm.State,
 	memplMetrics *mempl.Metrics,
 	logger log.Logger,
+	traceClient *trace.Client,
 ) (mempl.Mempool, p2p.Reactor) {
 	switch config.Mempool.Version {
+	case cfg.MempoolV2:
+		mp := mempoolv2.NewTxPool(
+			logger,
+			config.Mempool,
+			proxyApp.Mempool(),
+			state.LastBlockHeight,
+			mempoolv2.WithMetrics(memplMetrics),
+			mempoolv2.WithPreCheck(sm.TxPreCheck(state)),
+			mempoolv2.WithPostCheck(sm.TxPostCheck(state)),
+		)
+
+		reactor, err := mempoolv2.NewReactor(
+			mp,
+			&mempoolv2.ReactorOptions{
+				ListenOnly:  !config.Mempool.Broadcast,
+				MaxTxSize:   config.Mempool.MaxTxBytes,
+				TraceClient: traceClient,
+			},
+		)
+		if err != nil {
+			// TODO: find a more polite way of handling this error
+			panic(err)
+		}
+		if config.Consensus.WaitForTxs() {
+			mp.EnableTxsAvailable()
+		}
+		reactor.SetLogger(logger)
+
+		return mp, reactor
 	case cfg.MempoolV1:
 		mp := mempoolv1.NewTxMempool(
 			logger,
@@ -387,10 +424,12 @@ func createMempoolAndMempoolReactor(
 		reactor := mempoolv1.NewReactor(
 			config.Mempool,
 			mp,
+			traceClient,
 		)
 		if config.Consensus.WaitForTxs() {
 			mp.EnableTxsAvailable()
 		}
+		reactor.SetLogger(logger)
 
 		return mp, reactor
 
@@ -413,6 +452,7 @@ func createMempoolAndMempoolReactor(
 		if config.Consensus.WaitForTxs() {
 			mp.EnableTxsAvailable()
 		}
+		reactor.SetLogger(logger)
 
 		return mp, reactor
 
@@ -473,6 +513,7 @@ func createConsensusReactor(config *cfg.Config,
 	waitSync bool,
 	eventBus *types.EventBus,
 	consensusLogger log.Logger,
+	traceClient *trace.Client,
 ) (*cs.Reactor, *cs.State) {
 	consensusState := cs.NewState(
 		config.Consensus,
@@ -482,12 +523,18 @@ func createConsensusReactor(config *cfg.Config,
 		mempool,
 		evidencePool,
 		cs.StateMetrics(csMetrics),
+		cs.SetTraceClient(traceClient),
 	)
 	consensusState.SetLogger(consensusLogger)
 	if privValidator != nil {
 		consensusState.SetPrivValidator(privValidator)
 	}
-	consensusReactor := cs.NewReactor(consensusState, waitSync, cs.ReactorMetrics(csMetrics))
+	consensusReactor := cs.NewReactor(
+		consensusState,
+		waitSync,
+		cs.ReactorMetrics(csMetrics),
+		cs.ReactorTracing(traceClient),
+	)
 	consensusReactor.SetLogger(consensusLogger)
 	// services which will be publishing and/or subscribing for messages (events)
 	// consensusReactor will set it on consensusState and blockExecutor
@@ -702,7 +749,7 @@ func startStateSync(ssR *statesync.Reactor, bcR fastSyncReactor, conR *cs.Reacto
 	return nil
 }
 
-// NewNode returns a new, ready to go, Tendermint Node.
+// NewNode returns a new, ready to go, CometBFT Node.
 func NewNode(config *cfg.Config,
 	privValidator types.PrivValidator,
 	nodeKey *p2p.NodeKey,
@@ -713,6 +760,10 @@ func NewNode(config *cfg.Config,
 	logger log.Logger,
 	options ...Option,
 ) (*Node, error) {
+	if err := config.ValidateBasic(); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
+
 	blockStore, stateDB, err := initDBs(config, dbProvider)
 	if err != nil {
 		return nil, err
@@ -771,10 +822,12 @@ func NewNode(config *cfg.Config,
 	}
 
 	// Create the handshaker, which calls RequestInfo, sets the AppVersion on the state,
-	// and replays any blocks as necessary to sync tendermint with the app.
+	// and replays any blocks as necessary to sync CometBFT with the app.
 	consensusLogger := logger.With("module", "consensus")
+	var softwareVersion string
 	if !stateSync {
-		if err := doHandshake(stateStore, state, blockStore, genDoc, eventBus, proxyApp, consensusLogger); err != nil {
+		softwareVersion, err = doHandshake(context.TODO(), stateStore, state, blockStore, genDoc, eventBus, proxyApp, consensusLogger)
+		if err != nil {
 			return nil, err
 		}
 
@@ -785,6 +838,12 @@ func NewNode(config *cfg.Config,
 		if err != nil {
 			return nil, fmt.Errorf("cannot load state: %w", err)
 		}
+	} else {
+		resp, err := proxyApp.Query().InfoSync(proxy.RequestInfo)
+		if err != nil {
+			return nil, fmt.Errorf("error during info call: %w", err)
+		}
+		softwareVersion = resp.Version
 	}
 
 	// Determine whether we should do fast sync. This must happen after the handshake, since the
@@ -793,10 +852,23 @@ func NewNode(config *cfg.Config,
 
 	logNodeStartupInfo(state, pubKey, logger, consensusLogger)
 
-	csMetrics, p2pMetrics, memplMetrics, smMetrics := metricsProvider(genDoc.ChainID)
+	csMetrics, p2pMetrics, memplMetrics, smMetrics := metricsProvider(genDoc.ChainID, softwareVersion)
+
+	// create an optional influxdb client to send arbitrary data to a remote
+	// influxdb server. This is used to collect trace data from many different nodes
+	// in a network.
+	influxdbClient, err := trace.NewClient(
+		config.Instrumentation,
+		logger,
+		genDoc.ChainID,
+		string(nodeKey.ID()),
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	// Make MempoolReactor
-	mempool, mempoolReactor := createMempoolAndMempoolReactor(config, proxyApp, state, memplMetrics, logger)
+	mempool, mempoolReactor := createMempoolAndMempoolReactor(config, proxyApp, state, memplMetrics, logger, influxdbClient)
 
 	// Make Evidence Reactor
 	evidenceReactor, evidencePool, err := createEvidenceReactor(config, dbProvider, stateDB, blockStore, logger)
@@ -829,7 +901,7 @@ func NewNode(config *cfg.Config,
 	}
 	consensusReactor, consensusState := createConsensusReactor(
 		config, state, blockExec, blockStore, mempool, evidencePool,
-		privValidator, csMetrics, stateSync || fastSync, eventBus, consensusLogger,
+		privValidator, csMetrics, stateSync || fastSync, eventBus, consensusLogger, influxdbClient,
 	)
 
 	// Set up state sync reactor, and schedule a sync if requested.
@@ -844,7 +916,7 @@ func NewNode(config *cfg.Config,
 	)
 	stateSyncReactor.SetLogger(logger.With("module", "statesync"))
 
-	nodeInfo, err := makeNodeInfo(config, nodeKey, txIndexer, genDoc, state)
+	nodeInfo, err := makeNodeInfo(config, nodeKey, txIndexer, genDoc, state, softwareVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -927,6 +999,7 @@ func NewNode(config *cfg.Config,
 		indexerService:   indexerService,
 		blockIndexer:     blockIndexer,
 		eventBus:         eventBus,
+		influxDBClient:   influxdbClient,
 	}
 	node.BaseService = *service.NewBaseService(logger, "Node", node)
 
@@ -939,7 +1012,7 @@ func NewNode(config *cfg.Config,
 
 // OnStart starts the Node. It implements service.Service.
 func (n *Node) OnStart() error {
-	now := tmtime.Now()
+	now := cmttime.Now()
 	genTime := n.genesisDoc.GenesisTime
 	if genTime.After(now) {
 		n.Logger.Info("Genesis time is in the future. Sleeping until then...", "genTime", genTime)
@@ -962,6 +1035,18 @@ func (n *Node) OnStart() error {
 	if n.config.Instrumentation.Prometheus &&
 		n.config.Instrumentation.PrometheusListenAddr != "" {
 		n.prometheusSrv = n.startPrometheusServer(n.config.Instrumentation.PrometheusListenAddr)
+	}
+
+	if n.config.Instrumentation.PyroscopeURL != "" {
+		profiler, tracer, err := setupPyroscope(
+			n.config.Instrumentation,
+			string(n.nodeKey.ID()),
+		)
+		if err != nil {
+			return err
+		}
+		n.pyroscopeProfiler = profiler
+		n.pyroscopeTracer = tracer
 	}
 
 	// Start the transport.
@@ -1048,14 +1133,41 @@ func (n *Node) OnStop() {
 			n.Logger.Error("Prometheus HTTP server Shutdown", "err", err)
 		}
 	}
+
 	if n.blockStore != nil {
+		n.Logger.Info("Closing blockstore")
 		if err := n.blockStore.Close(); err != nil {
 			n.Logger.Error("problem closing blockstore", "err", err)
 		}
 	}
+
 	if n.stateStore != nil {
+		n.Logger.Info("Closing statestore")
 		if err := n.stateStore.Close(); err != nil {
 			n.Logger.Error("problem closing statestore", "err", err)
+		}
+	}
+
+	if n.influxDBClient != nil {
+		n.influxDBClient.Stop()
+	}
+
+	if n.pyroscopeProfiler != nil {
+		if err := n.pyroscopeProfiler.Stop(); err != nil {
+			n.Logger.Error("Pyroscope profiler Stop", "err", err)
+		}
+	}
+
+	if n.pyroscopeTracer != nil {
+		if err := n.pyroscopeTracer.Shutdown(context.Background()); err != nil {
+			n.Logger.Error("Pyroscope tracer Shutdown", "err", err)
+		}
+	}
+
+	if n.evidencePool != nil {
+		n.Logger.Info("Closing evidencestore")
+		if err := n.EvidencePool().Close(); err != nil {
+			n.Logger.Error("problem closing evidencestore", "err", err)
 		}
 	}
 }
@@ -1089,11 +1201,8 @@ func (n *Node) ConfigureRPC() error {
 
 		Config: *n.config.RPC,
 	})
-	if err := rpccore.InitGenesisChunks(); err != nil {
-		return err
-	}
 
-	return nil
+	return rpccore.InitGenesisChunks()
 }
 
 func (n *Node) startRPC() ([]net.Listener, error) {
@@ -1128,7 +1237,7 @@ func (n *Node) startRPC() ([]net.Listener, error) {
 		wm := rpcserver.NewWebsocketManager(rpccore.Routes,
 			rpcserver.OnDisconnect(func(remoteAddr string) {
 				err := n.eventBus.UnsubscribeAll(context.Background(), remoteAddr)
-				if err != nil && err != tmpubsub.ErrSubscriptionNotFound {
+				if err != nil && err != cmtpubsub.ErrSubscriptionNotFound {
 					wmLogger.Error("Failed to unsubscribe addr from events", "addr", remoteAddr, "err", err)
 				}
 			}),
@@ -1325,6 +1434,7 @@ func makeNodeInfo(
 	txIndexer txindex.TxIndexer,
 	genDoc *types.GenesisDoc,
 	state sm.State,
+	softwareVersion string,
 ) (p2p.DefaultNodeInfo, error) {
 	txIndexerStatus := "on"
 	if _, ok := txIndexer.(*null.TxIndex); ok {
@@ -1351,7 +1461,7 @@ func makeNodeInfo(
 		),
 		DefaultNodeID: nodeKey.ID(),
 		Network:       genDoc.ChainID,
-		Version:       version.TMCoreSemVer,
+		Version:       softwareVersion,
 		Channels: []byte{
 			bcChannel,
 			cs.StateChannel, cs.DataChannel, cs.VoteChannel, cs.VoteSetBitsChannel,
@@ -1368,6 +1478,10 @@ func makeNodeInfo(
 
 	if config.P2P.PexReactor {
 		nodeInfo.Channels = append(nodeInfo.Channels, pex.PexChannel)
+	}
+
+	if config.Mempool.Version == cfg.MempoolV2 {
+		nodeInfo.Channels = append(nodeInfo.Channels, mempoolv2.MempoolStateChannel)
 	}
 
 	lAddr := config.P2P.ExternalAddress
@@ -1426,7 +1540,7 @@ func loadGenesisDoc(db dbm.DB) (*types.GenesisDoc, error) {
 		return nil, errors.New("genesis doc not found")
 	}
 	var genDoc *types.GenesisDoc
-	err = tmjson.Unmarshal(b, &genDoc)
+	err = cmtjson.Unmarshal(b, &genDoc)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to load genesis doc due to unmarshaling error: %v (bytes: %X)", err, b))
 	}
@@ -1435,15 +1549,12 @@ func loadGenesisDoc(db dbm.DB) (*types.GenesisDoc, error) {
 
 // panics if failed to marshal the given genesis document
 func saveGenesisDoc(db dbm.DB, genDoc *types.GenesisDoc) error {
-	b, err := tmjson.Marshal(genDoc)
+	b, err := cmtjson.Marshal(genDoc)
 	if err != nil {
 		return fmt.Errorf("failed to save genesis doc due to marshaling error: %w", err)
 	}
-	if err := db.SetSync(genesisDocKey, b); err != nil {
-		return err
-	}
 
-	return nil
+	return db.SetSync(genesisDocKey, b)
 }
 
 func createAndStartPrivValidatorSocketClient(

@@ -11,9 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	abci "github.com/tendermint/tendermint/abci/types"
-	tmpubsub "github.com/tendermint/tendermint/libs/pubsub"
-	tmquery "github.com/tendermint/tendermint/libs/pubsub/query"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
+	cmtpubsub "github.com/tendermint/tendermint/libs/pubsub"
+	cmtquery "github.com/tendermint/tendermint/libs/pubsub/query"
+	cmtrand "github.com/tendermint/tendermint/libs/rand"
 )
 
 func TestEventBusPublishEventTx(t *testing.T) {
@@ -36,7 +36,58 @@ func TestEventBusPublishEventTx(t *testing.T) {
 
 	// PublishEventTx adds 3 composite keys, so the query below should work
 	query := fmt.Sprintf("tm.event='Tx' AND tx.height=1 AND tx.hash='%X' AND testType.baz=1", tx.Hash())
-	txsSub, err := eventBus.Subscribe(context.Background(), "test", tmquery.MustParse(query))
+	txsSub, err := eventBus.Subscribe(context.Background(), "test", cmtquery.MustParse(query))
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	go func() {
+		msg := <-txsSub.Out()
+		edt := msg.Data().(EventDataTx)
+		assert.Equal(t, int64(1), edt.Height)
+		assert.Equal(t, uint32(0), edt.Index)
+		assert.EqualValues(t, tx, edt.Tx)
+		assert.Equal(t, result, edt.Result)
+		close(done)
+	}()
+
+	err = eventBus.PublishEventTx(EventDataTx{abci.TxResult{
+		Height: 1,
+		Index:  0,
+		Tx:     tx,
+		Result: result,
+	}})
+	assert.NoError(t, err)
+
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		t.Fatal("did not receive a transaction after 1 sec.")
+	}
+}
+
+func TestEventBusPublishEventIndexWrapper(t *testing.T) {
+	eventBus := NewEventBus()
+	err := eventBus.Start()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := eventBus.Stop(); err != nil {
+			t.Error(err)
+		}
+	})
+
+	tx := Tx("foo")
+	require.NoError(t, err)
+
+	result := abci.ResponseDeliverTx{
+		Data: []byte("bar"),
+		Events: []abci.Event{
+			{Type: "testType", Attributes: []abci.EventAttribute{{Key: []byte("baz"), Value: []byte("1")}}},
+		},
+	}
+
+	// PublishEventTx adds 3 composite keys, so the query below should work
+	query := fmt.Sprintf("tm.event='Tx' AND tx.height=1 AND tx.hash='%X' AND testType.baz=1", tx.Hash())
+	txsSub, err := eventBus.Subscribe(context.Background(), "test", cmtquery.MustParse(query))
 	require.NoError(t, err)
 
 	done := make(chan struct{})
@@ -75,7 +126,8 @@ func TestEventBusPublishEventNewBlock(t *testing.T) {
 		}
 	})
 
-	block := MakeBlock(0, []Tx{}, nil, []Evidence{})
+	block := MakeBlock(0, makeData([]Tx{}), nil, []Evidence{})
+	// blockID := BlockID{Hash: block.Hash(), PartSetHeader: block.MakePartSet(BlockPartSizeBytes).Header()}
 	resultBeginBlock := abci.ResponseBeginBlock{
 		Events: []abci.Event{
 			{Type: "testType", Attributes: []abci.EventAttribute{{Key: []byte("baz"), Value: []byte("1")}}},
@@ -89,31 +141,24 @@ func TestEventBusPublishEventNewBlock(t *testing.T) {
 
 	// PublishEventNewBlock adds the tm.event compositeKey, so the query below should work
 	query := "tm.event='NewBlock' AND testType.baz=1 AND testType.foz=2"
-	blocksSub, err := eventBus.Subscribe(context.Background(), "test", tmquery.MustParse(query))
+	blocksSub, err := eventBus.Subscribe(context.Background(), "test", cmtquery.MustParse(query))
 	require.NoError(t, err)
-
-	done := make(chan struct{})
-	go func() {
-		msg := <-blocksSub.Out()
-		edt := msg.Data().(EventDataNewBlock)
-		assert.Equal(t, block, edt.Block)
-		assert.Equal(t, resultBeginBlock, edt.ResultBeginBlock)
-		assert.Equal(t, resultEndBlock, edt.ResultEndBlock)
-		close(done)
-	}()
 
 	err = eventBus.PublishEventNewBlock(EventDataNewBlock{
 		Block:            block,
 		ResultBeginBlock: resultBeginBlock,
 		ResultEndBlock:   resultEndBlock,
 	})
-	assert.NoError(t, err)
 
-	select {
-	case <-done:
-	case <-time.After(1 * time.Second):
-		t.Fatal("did not receive a block after 1 sec.")
-	}
+	done := make(chan struct{})
+	// go func() {
+	msg := <-blocksSub.Out()
+	edt := msg.Data().(EventDataNewBlock)
+	assert.Equal(t, block, edt.Block)
+	assert.Equal(t, resultBeginBlock, edt.ResultBeginBlock)
+	assert.Equal(t, resultEndBlock, edt.ResultEndBlock)
+	close(done)
+	assert.NoError(t, err)
 }
 
 func TestEventBusPublishEventTxDuplicateKeys(t *testing.T) {
@@ -184,7 +229,7 @@ func TestEventBusPublishEventTxDuplicateKeys(t *testing.T) {
 	}
 
 	for i, tc := range testCases {
-		sub, err := eventBus.Subscribe(context.Background(), fmt.Sprintf("client-%d", i), tmquery.MustParse(tc.query))
+		sub, err := eventBus.Subscribe(context.Background(), fmt.Sprintf("client-%d", i), cmtquery.MustParse(tc.query))
 		require.NoError(t, err)
 
 		done := make(chan struct{})
@@ -234,7 +279,7 @@ func TestEventBusPublishEventNewBlockHeader(t *testing.T) {
 		}
 	})
 
-	block := MakeBlock(0, []Tx{}, nil, []Evidence{})
+	block := MakeBlock(0, makeData([]Tx{}), nil, []Evidence{})
 	resultBeginBlock := abci.ResponseBeginBlock{
 		Events: []abci.Event{
 			{Type: "testType", Attributes: []abci.EventAttribute{{Key: []byte("baz"), Value: []byte("1")}}},
@@ -248,7 +293,7 @@ func TestEventBusPublishEventNewBlockHeader(t *testing.T) {
 
 	// PublishEventNewBlockHeader adds the tm.event compositeKey, so the query below should work
 	query := "tm.event='NewBlockHeader' AND testType.baz=1 AND testType.foz=2"
-	headersSub, err := eventBus.Subscribe(context.Background(), "test", tmquery.MustParse(query))
+	headersSub, err := eventBus.Subscribe(context.Background(), "test", cmtquery.MustParse(query))
 	require.NoError(t, err)
 
 	done := make(chan struct{})
@@ -288,7 +333,7 @@ func TestEventBusPublishEventNewEvidence(t *testing.T) {
 	ev := NewMockDuplicateVoteEvidence(1, time.Now(), "test-chain-id")
 
 	query := "tm.event='NewEvidence'"
-	evSub, err := eventBus.Subscribe(context.Background(), "test", tmquery.MustParse(query))
+	evSub, err := eventBus.Subscribe(context.Background(), "test", cmtquery.MustParse(query))
 	require.NoError(t, err)
 
 	done := make(chan struct{})
@@ -325,7 +370,7 @@ func TestEventBusPublish(t *testing.T) {
 
 	const numEventsExpected = 14
 
-	sub, err := eventBus.Subscribe(context.Background(), "test", tmquery.Empty{}, numEventsExpected)
+	sub, err := eventBus.Subscribe(context.Background(), "test", cmtquery.Empty{}, numEventsExpected)
 	require.NoError(t, err)
 
 	done := make(chan struct{})
@@ -476,10 +521,10 @@ var events = []string{
 	EventVote}
 
 func randEvent() string {
-	return events[tmrand.Intn(len(events))]
+	return events[cmtrand.Intn(len(events))]
 }
 
-var queries = []tmpubsub.Query{
+var queries = []cmtpubsub.Query{
 	EventQueryNewBlock,
 	EventQueryNewBlockHeader,
 	EventQueryNewRound,
@@ -493,6 +538,6 @@ var queries = []tmpubsub.Query{
 	EventQueryTimeoutWait,
 	EventQueryVote}
 
-func randQuery() tmpubsub.Query {
-	return queries[tmrand.Intn(len(queries))]
+func randQuery() cmtpubsub.Query {
+	return queries[cmtrand.Intn(len(queries))]
 }

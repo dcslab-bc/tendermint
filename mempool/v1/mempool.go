@@ -50,7 +50,8 @@ type TxMempool struct {
 	txsAvailable         chan struct{} // one value sent per height when mempool is not empty
 	preCheck             mempool.PreCheckFunc
 	postCheck            mempool.PostCheckFunc
-	height               int64 // the latest height passed to Update
+	height               int64     // the latest height passed to Update
+	lastPurgeTime        time.Time // the last time we attempted to purge transactions via the TTL
 
 	txs        *clist.CList // valid transactions (passed CheckTx)
 	txByKey    map[types.TxKey]*clist.CElement
@@ -191,6 +192,7 @@ func (txmp *TxMempool) CheckTx(tx types.Tx, cb func(*abci.Response), txInfo memp
 		// If a precheck hook is defined, call it before invoking the application.
 		if txmp.preCheck != nil {
 			if err := txmp.preCheck(tx); err != nil {
+				txmp.metrics.FailedTxs.Add(1)
 				return 0, mempool.ErrPreCheck{Reason: err}
 			}
 		}
@@ -206,6 +208,7 @@ func (txmp *TxMempool) CheckTx(tx types.Tx, cb func(*abci.Response), txInfo memp
 		if !txmp.cache.Push(tx) {
 			// If the cached transaction is also in the pool, record its sender.
 			if elt, ok := txmp.txByKey[txKey]; ok {
+				txmp.metrics.AlreadySeenTxs.Add(1)
 				w := elt.Value.(*WrappedTx)
 				w.SetPeer(txInfo.SenderID)
 			}
@@ -400,6 +403,7 @@ func (txmp *TxMempool) Update(
 		txmp.postCheck = newPostFn
 	}
 
+	txmp.metrics.SuccessfulTxs.Add(float64(len(blockTxs)))
 	for i, tx := range blockTxs {
 		// Add successful committed transactions to the cache (if they are not
 		// already present).  Transactions that failed to commit are removed from
@@ -454,7 +458,7 @@ func (txmp *TxMempool) addNewTransaction(wtx *WrappedTx, checkTxRes *abci.Respon
 	}
 
 	if err != nil || checkTxRes.Code != abci.CodeTypeOK {
-		txmp.logger.Info(
+		txmp.logger.Debug(
 			"rejected bad transaction",
 			"priority", wtx.Priority(),
 			"tx", fmt.Sprintf("%X", wtx.tx.Hash()),
@@ -497,7 +501,6 @@ func (txmp *TxMempool) addNewTransaction(wtx *WrappedTx, checkTxRes *abci.Respon
 			checkTxRes.MempoolError =
 				fmt.Sprintf("rejected valid incoming transaction; tx already exists for sender %q (%X)",
 					sender, w.tx.Hash())
-			txmp.metrics.RejectedTxs.Add(1)
 			return
 		}
 	}
@@ -532,7 +535,7 @@ func (txmp *TxMempool) addNewTransaction(wtx *WrappedTx, checkTxRes *abci.Respon
 			checkTxRes.MempoolError =
 				fmt.Sprintf("rejected valid incoming transaction; mempool is full (%X)",
 					wtx.tx.Hash())
-			txmp.metrics.RejectedTxs.Add(1)
+			txmp.metrics.EvictedTxs.Add(1)
 			return
 		}
 
@@ -721,6 +724,17 @@ func (txmp *TxMempool) canAddTx(wtx *WrappedTx) error {
 	return nil
 }
 
+// CheckToPurgeExpiredTxs checks if there has been adequate time since the last time
+// the txpool looped through all transactions and if so, performs a purge of any transaction
+// that has expired according to the TTLDuration. This is thread safe.
+func (txmp *TxMempool) CheckToPurgeExpiredTxs() {
+	txmp.mtx.Lock()
+	defer txmp.mtx.Unlock()
+	if txmp.config.TTLDuration > 0 && time.Since(txmp.lastPurgeTime) > txmp.config.TTLDuration {
+		txmp.purgeExpiredTxs(txmp.height)
+	}
+}
+
 // purgeExpiredTxs removes all transactions from the mempool that have exceeded
 // their respective height or time-based limits as of the given blockHeight.
 // Transactions removed by this operation are not removed from the cache.
@@ -750,6 +764,8 @@ func (txmp *TxMempool) purgeExpiredTxs(blockHeight int64) {
 		}
 		cur = next
 	}
+
+	txmp.lastPurgeTime = now
 }
 
 func (txmp *TxMempool) notifyTxsAvailable() {

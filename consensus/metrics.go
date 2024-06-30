@@ -1,8 +1,12 @@
 package consensus
 
 import (
+	"strings"
+	"time"
+
 	"github.com/go-kit/kit/metrics"
 	"github.com/go-kit/kit/metrics/discard"
+	cstypes "github.com/tendermint/tendermint/consensus/types"
 
 	prometheus "github.com/go-kit/kit/metrics/prometheus"
 	stdprometheus "github.com/prometheus/client_golang/prometheus"
@@ -44,6 +48,8 @@ type Metrics struct {
 
 	// Time between this and the last block.
 	BlockIntervalSeconds metrics.Histogram
+	// Block time in seconds.
+	BlockTimeSeconds metrics.Gauge
 
 	// Number of transactions.
 	NumTxs metrics.Gauge
@@ -53,13 +59,21 @@ type Metrics struct {
 	TotalTxs metrics.Gauge
 	// The latest block height.
 	CommittedHeight metrics.Gauge
-	// Whether or not a node is fast syncing. 1 if yes, 0 if no.
+	// Whether a node is fast syncing. 1 if yes, 0 if no.
 	FastSyncing metrics.Gauge
-	// Whether or not a node is state syncing. 1 if yes, 0 if no.
+	// Whether a node is state syncing. 1 if yes, 0 if no.
 	StateSyncing metrics.Gauge
 
 	// Number of blockparts transmitted by peer.
 	BlockParts metrics.Counter
+
+	// Histogram of step duration.
+	StepDuration metrics.Histogram
+	stepStart    time.Time
+
+	// Number of block parts received by the node, separated by whether the part
+	// was relevant to the block the node is trying to gather or not.
+	BlockGossipPartsReceived metrics.Counter
 
 	// QuroumPrevoteMessageDelay is the interval in seconds between the proposal
 	// timestamp and the timestamp of the earliest prevote that achieved a quorum
@@ -99,7 +113,6 @@ func PrometheusMetrics(namespace string, labelsAndValues ...string) *Metrics {
 			Name:      "rounds",
 			Help:      "Number of rounds.",
 		}, labels).With(labelsAndValues...),
-
 		Validators: prometheus.NewGaugeFrom(stdprometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: MetricsSubsystem,
@@ -160,6 +173,12 @@ func PrometheusMetrics(namespace string, labelsAndValues ...string) *Metrics {
 			Name:      "block_interval_seconds",
 			Help:      "Time between this and the last block.",
 		}, labels).With(labelsAndValues...),
+		BlockTimeSeconds: prometheus.NewGaugeFrom(stdprometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "block_time_seconds",
+			Help:      "Duration between this block and the preceding one.",
+		}, labels).With(labelsAndValues...),
 		NumTxs: prometheus.NewGaugeFrom(stdprometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: MetricsSubsystem,
@@ -202,6 +221,20 @@ func PrometheusMetrics(namespace string, labelsAndValues ...string) *Metrics {
 			Name:      "block_parts",
 			Help:      "Number of blockparts transmitted by peer.",
 		}, append(labels, "peer_id")).With(labelsAndValues...),
+		BlockGossipPartsReceived: prometheus.NewCounterFrom(stdprometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "block_gossip_parts_received",
+			Help: "Number of block parts received by the node, labeled by whether the " +
+				"part was relevant to the block the node was currently gathering or not.",
+		}, append(labels, "matches_current")).With(labelsAndValues...),
+		StepDuration: prometheus.NewHistogramFrom(stdprometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: MetricsSubsystem,
+			Name:      "step_duration_seconds",
+			Help:      "Time spent per step.",
+			Buckets:   stdprometheus.ExponentialBucketsRange(0.1, 100, 8),
+		}, append(labels, "step")).With(labelsAndValues...),
 		QuorumPrevoteMessageDelay: prometheus.NewGaugeFrom(stdprometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: MetricsSubsystem,
@@ -226,7 +259,8 @@ func NopMetrics() *Metrics {
 
 		ValidatorLastSignedHeight: discard.NewGauge(),
 
-		Rounds: discard.NewGauge(),
+		Rounds:       discard.NewGauge(),
+		StepDuration: discard.NewHistogram(),
 
 		Validators:               discard.NewGauge(),
 		ValidatorsPower:          discard.NewGauge(),
@@ -238,6 +272,7 @@ func NopMetrics() *Metrics {
 		ByzantineValidatorsPower: discard.NewGauge(),
 
 		BlockIntervalSeconds: discard.NewHistogram(),
+		BlockTimeSeconds:     discard.NewGauge(),
 
 		NumTxs:                    discard.NewGauge(),
 		BlockSizeBytes:            discard.NewGauge(),
@@ -246,7 +281,21 @@ func NopMetrics() *Metrics {
 		FastSyncing:               discard.NewGauge(),
 		StateSyncing:              discard.NewGauge(),
 		BlockParts:                discard.NewCounter(),
+		BlockGossipPartsReceived:  discard.NewCounter(),
 		QuorumPrevoteMessageDelay: discard.NewGauge(),
 		FullPrevoteMessageDelay:   discard.NewGauge(),
 	}
+}
+
+func (m *Metrics) MarkRound(r int32) {
+	m.Rounds.Set(float64(r))
+}
+
+func (m *Metrics) MarkStep(s cstypes.RoundStepType) {
+	if !m.stepStart.IsZero() {
+		stepTime := time.Since(m.stepStart).Seconds()
+		stepName := strings.TrimPrefix(s.String(), "RoundStep")
+		m.StepDuration.With("step", stepName).Observe(stepTime)
+	}
+	m.stepStart = time.Now()
 }

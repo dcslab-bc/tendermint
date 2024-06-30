@@ -10,7 +10,7 @@ the server response you want to mock (eg. error handling),
 or if you just want to record the calls to verify in your tests.
 
 For real clients, you probably want the "http" package.  If you
-want to directly call a tendermint node in process, you can use the
+want to directly call a CometBFT node in process, you can use the
 "local" package.
 */
 
@@ -167,6 +167,23 @@ func (c Client) BlockByHash(ctx context.Context, hash []byte) (*ctypes.ResultBlo
 
 func (c Client) Commit(ctx context.Context, height *int64) (*ctypes.ResultCommit, error) {
 	return core.Commit(&rpctypes.Context{}, height)
+}
+
+func (c Client) DataCommitment(
+	ctx context.Context,
+	start uint64,
+	end uint64,
+) (*ctypes.ResultDataCommitment, error) {
+	return core.DataCommitment(&rpctypes.Context{}, start, end)
+}
+
+func (c Client) DataRootInclusionProof(
+	ctx context.Context,
+	height uint64,
+	start uint64,
+	end uint64,
+) (*ctypes.ResultDataRootInclusionProof, error) {
+	return core.DataRootInclusionProof(&rpctypes.Context{}, int64(height), start, end)
 }
 
 func (c Client) Validators(ctx context.Context, height *int64, page, perPage *int) (*ctypes.ResultValidators, error) {

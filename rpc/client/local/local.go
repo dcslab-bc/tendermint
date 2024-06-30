@@ -7,8 +7,8 @@ import (
 
 	"github.com/tendermint/tendermint/libs/bytes"
 	"github.com/tendermint/tendermint/libs/log"
-	tmpubsub "github.com/tendermint/tendermint/libs/pubsub"
-	tmquery "github.com/tendermint/tendermint/libs/pubsub/query"
+	cmtpubsub "github.com/tendermint/tendermint/libs/pubsub"
+	cmtquery "github.com/tendermint/tendermint/libs/pubsub/query"
 	nm "github.com/tendermint/tendermint/node"
 	rpcclient "github.com/tendermint/tendermint/rpc/client"
 	"github.com/tendermint/tendermint/rpc/core"
@@ -25,14 +25,14 @@ This implementation is useful for:
 
 * Running tests against a node in-process without the overhead
 of going through an http server
-* Communication between an ABCI app and Tendermint core when they
+* Communication between an ABCI app and CometBFT when they
 are compiled in process.
 
 For real clients, you probably want to use client.HTTP.  For more
 powerful control during testing, you probably want the "client/mock" package.
 
-You can subscribe for any event published by Tendermint using Subscribe method.
-Note delivery is best-effort. If you don't read events fast enough, Tendermint
+You can subscribe for any event published by CometBFT using Subscribe method.
+Note delivery is best-effort. If you don't read events fast enough, CometBFT
 might cancel the subscription. The client will attempt to resubscribe (you
 don't need to do anything). It will keep trying indefinitely with exponential
 backoff (10ms -> 20ms -> 40ms) until successful.
@@ -161,6 +161,10 @@ func (c *Local) Block(ctx context.Context, height *int64) (*ctypes.ResultBlock, 
 	return core.Block(c.ctx, height)
 }
 
+func (c *Local) SignedBlock(ctx context.Context, height *int64) (*ctypes.ResultSignedBlock, error) {
+	return core.SignedBlock(c.ctx, height)
+}
+
 func (c *Local) BlockByHash(ctx context.Context, hash []byte) (*ctypes.ResultBlock, error) {
 	return core.BlockByHash(c.ctx, hash)
 }
@@ -169,8 +173,33 @@ func (c *Local) BlockResults(ctx context.Context, height *int64) (*ctypes.Result
 	return core.BlockResults(c.ctx, height)
 }
 
+func (c *Local) Header(ctx context.Context, height *int64) (*ctypes.ResultHeader, error) {
+	return core.Header(c.ctx, height)
+}
+
+func (c *Local) HeaderByHash(ctx context.Context, hash bytes.HexBytes) (*ctypes.ResultHeader, error) {
+	return core.HeaderByHash(c.ctx, hash)
+}
+
 func (c *Local) Commit(ctx context.Context, height *int64) (*ctypes.ResultCommit, error) {
 	return core.Commit(c.ctx, height)
+}
+
+func (c *Local) DataCommitment(
+	_ context.Context,
+	start uint64,
+	end uint64,
+) (*ctypes.ResultDataCommitment, error) {
+	return core.DataCommitment(c.ctx, start, end)
+}
+
+func (c *Local) DataRootInclusionProof(
+	_ context.Context,
+	height uint64,
+	start uint64,
+	end uint64,
+) (*ctypes.ResultDataRootInclusionProof, error) {
+	return core.DataRootInclusionProof(c.ctx, int64(height), start, end)
 }
 
 func (c *Local) Validators(ctx context.Context, height *int64, page, perPage *int) (*ctypes.ResultValidators, error) {
@@ -179,6 +208,15 @@ func (c *Local) Validators(ctx context.Context, height *int64, page, perPage *in
 
 func (c *Local) Tx(ctx context.Context, hash []byte, prove bool) (*ctypes.ResultTx, error) {
 	return core.Tx(c.ctx, hash, prove)
+}
+
+func (c *Local) ProveShares(
+	ctx context.Context,
+	height uint64,
+	startShare uint64,
+	endShare uint64,
+) (types.ShareProof, error) {
+	return core.ProveShares(c.ctx, int64(height), startShare, endShare)
 }
 
 func (c *Local) TxSearch(
@@ -210,7 +248,7 @@ func (c *Local) Subscribe(
 	subscriber,
 	query string,
 	outCapacity ...int) (out <-chan ctypes.ResultEvent, err error) {
-	q, err := tmquery.New(query)
+	q, err := cmtquery.New(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse query: %w", err)
 	}
@@ -239,7 +277,7 @@ func (c *Local) Subscribe(
 func (c *Local) eventsRoutine(
 	sub types.Subscription,
 	subscriber string,
-	q tmpubsub.Query,
+	q cmtpubsub.Query,
 	outc chan<- ctypes.ResultEvent) {
 	for {
 		select {
@@ -255,7 +293,7 @@ func (c *Local) eventsRoutine(
 				}
 			}
 		case <-sub.Cancelled():
-			if sub.Err() == tmpubsub.ErrUnsubscribed {
+			if sub.Err() == cmtpubsub.ErrUnsubscribed {
 				return
 			}
 
@@ -271,7 +309,7 @@ func (c *Local) eventsRoutine(
 }
 
 // Try to resubscribe with exponential backoff.
-func (c *Local) resubscribe(subscriber string, q tmpubsub.Query) types.Subscription {
+func (c *Local) resubscribe(subscriber string, q cmtpubsub.Query) types.Subscription {
 	attempts := 0
 	for {
 		if !c.IsRunning() {
@@ -289,7 +327,7 @@ func (c *Local) resubscribe(subscriber string, q tmpubsub.Query) types.Subscript
 }
 
 func (c *Local) Unsubscribe(ctx context.Context, subscriber, query string) error {
-	q, err := tmquery.New(query)
+	q, err := cmtquery.New(query)
 	if err != nil {
 		return fmt.Errorf("failed to parse query: %w", err)
 	}

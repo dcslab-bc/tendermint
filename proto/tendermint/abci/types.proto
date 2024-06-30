@@ -36,6 +36,8 @@ message Request {
     RequestOfferSnapshot      offer_snapshot       = 13;
     RequestLoadSnapshotChunk  load_snapshot_chunk  = 14;
     RequestApplySnapshotChunk apply_snapshot_chunk = 15;
+    RequestPrepareProposal    prepare_proposal     = 16;
+    RequestProcessProposal    process_proposal     = 17;
   }
 }
 
@@ -124,6 +126,28 @@ message RequestApplySnapshotChunk {
   string sender = 3;
 }
 
+message RequestPrepareProposal {
+  // block_data is an array of transactions that will be included in a block,
+  // sent to the app for possible modifications.
+  // applications can not exceed the size of the data passed to it.
+  tendermint.types.Data block_data = 1;
+  // If an application decides to populate block_data with extra information, they can not exceed this value.
+  int64 block_data_size = 2;
+  // chain_id is a unique identifier for the blockchain network this proposal
+  // belongs to (e.g. mocha-1).
+  string chain_id = 3;
+  // height is the height of the proposal block
+  int64 height = 4;
+  // time is the time that will end up in the header. This is the voting power
+  // weighted median of the last commit.
+  google.protobuf.Timestamp time = 5 [(gogoproto.nullable) = false, (gogoproto.stdtime) = true];
+}
+
+message RequestProcessProposal {
+  tendermint.types.Header header     = 1 [(gogoproto.nullable) = false];
+  tendermint.types.Data   block_data = 2;
+}
+
 //----------------------------------------
 // Response types
 
@@ -145,6 +169,8 @@ message Response {
     ResponseOfferSnapshot      offer_snapshot       = 14;
     ResponseLoadSnapshotChunk  load_snapshot_chunk  = 15;
     ResponseApplySnapshotChunk apply_snapshot_chunk = 16;
+    ResponsePrepareProposal    prepare_proposal     = 17;
+    ResponseProcessProposal    process_proposal     = 18;
   }
 }
 
@@ -214,7 +240,7 @@ message ResponseCheckTx {
   string sender    = 9;
   int64  priority  = 10;
 
-  // mempool_error is set by Tendermint.
+  // mempool_error is set by CometBFT.
   // ABCI applictions creating a ResponseCheckTX should not set mempool_error.
   string mempool_error = 11;
 }
@@ -279,6 +305,21 @@ message ResponseApplySnapshotChunk {
     RETRY           = 3;  // Retry chunk (combine with refetch and reject)
     RETRY_SNAPSHOT  = 4;  // Retry snapshot (combine with refetch and reject)
     REJECT_SNAPSHOT = 5;  // Reject this snapshot, try others
+  }
+}
+
+message ResponsePrepareProposal {
+  tendermint.types.Data block_data = 1;
+}
+
+message ResponseProcessProposal {
+  Result         result   = 1;
+  repeated bytes evidence = 2;
+
+  enum Result {
+    UNKNOWN = 0;  // Unknown result, invalidate
+    ACCEPT  = 1;  // proposal verified, vote on the proposal
+    REJECT  = 2;  // proposal invalidated
   }
 }
 
@@ -406,8 +447,8 @@ service ABCIApplication {
   rpc EndBlock(RequestEndBlock) returns (ResponseEndBlock);
   rpc ListSnapshots(RequestListSnapshots) returns (ResponseListSnapshots);
   rpc OfferSnapshot(RequestOfferSnapshot) returns (ResponseOfferSnapshot);
-  rpc LoadSnapshotChunk(RequestLoadSnapshotChunk)
-      returns (ResponseLoadSnapshotChunk);
-  rpc ApplySnapshotChunk(RequestApplySnapshotChunk)
-      returns (ResponseApplySnapshotChunk);
+  rpc LoadSnapshotChunk(RequestLoadSnapshotChunk) returns (ResponseLoadSnapshotChunk);
+  rpc ApplySnapshotChunk(RequestApplySnapshotChunk) returns (ResponseApplySnapshotChunk);
+  rpc PrepareProposal(RequestPrepareProposal) returns (ResponsePrepareProposal);
+  rpc ProcessProposal(RequestProcessProposal) returns (ResponseProcessProposal);
 }

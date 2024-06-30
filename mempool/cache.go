@@ -3,7 +3,7 @@ package mempool
 import (
 	"container/list"
 
-	tmsync "github.com/tendermint/tendermint/libs/sync"
+	cmtsync "github.com/tendermint/tendermint/libs/sync"
 	"github.com/tendermint/tendermint/types"
 )
 
@@ -33,7 +33,7 @@ var _ TxCache = (*LRUTxCache)(nil)
 // LRUTxCache maintains a thread-safe LRU cache of raw transactions. The cache
 // only stores the hash of the raw transaction.
 type LRUTxCache struct {
-	mtx      tmsync.Mutex
+	mtx      cmtsync.Mutex
 	size     int
 	cacheMap map[types.TxKey]*list.Element
 	list     *list.List
@@ -89,10 +89,14 @@ func (c *LRUTxCache) Push(tx types.Tx) bool {
 }
 
 func (c *LRUTxCache) Remove(tx types.Tx) {
+	key := tx.Key()
+	c.RemoveTxByKey(key)
+}
+
+func (c *LRUTxCache) RemoveTxByKey(key types.TxKey) {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 
-	key := tx.Key()
 	e := c.cacheMap[key]
 	delete(c.cacheMap, key)
 

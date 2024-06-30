@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/tendermint/tendermint/crypto/merkle"
+
 	abci "github.com/tendermint/tendermint/abci/types"
 	"github.com/tendermint/tendermint/crypto"
 	"github.com/tendermint/tendermint/libs/bytes"
 	"github.com/tendermint/tendermint/p2p"
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
+	cmtproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/types"
 )
 
@@ -39,6 +41,19 @@ type ResultBlock struct {
 	Block   *types.Block  `json:"block"`
 }
 
+// Single block with all data for validation
+type ResultSignedBlock struct {
+	Header       types.Header       `json:"header"`
+	Commit       types.Commit       `json:"commit"`
+	Data         types.Data         `json:"data"`
+	ValidatorSet types.ValidatorSet `json:"validator_set"`
+}
+
+// ResultHeader represents the response for a Header RPC Client query
+type ResultHeader struct {
+	Header *types.Header `json:"header"`
+}
+
 // Commit and Header
 type ResultCommit struct {
 	types.SignedHeader `json:"signed_header"`
@@ -53,6 +68,14 @@ type ResultBlockResults struct {
 	EndBlockEvents        []abci.Event              `json:"end_block_events"`
 	ValidatorUpdates      []abci.ValidatorUpdate    `json:"validator_updates"`
 	ConsensusParamUpdates *abci.ConsensusParams     `json:"consensus_param_updates"`
+}
+
+type ResultDataCommitment struct {
+	DataCommitment bytes.HexBytes `json:"data_commitment"`
+}
+
+type ResultDataRootInclusionProof struct {
+	Proof merkle.Proof `json:"proof"`
 }
 
 // NewResultCommit is a helper to initialize the ResultCommit with
@@ -144,8 +167,8 @@ type ResultValidators struct {
 
 // ConsensusParams for given height
 type ResultConsensusParams struct {
-	BlockHeight     int64                   `json:"block_height"`
-	ConsensusParams tmproto.ConsensusParams `json:"consensus_params"`
+	BlockHeight     int64                    `json:"block_height"`
+	ConsensusParams cmtproto.ConsensusParams `json:"consensus_params"`
 }
 
 // Info about the consensus state.
@@ -196,7 +219,7 @@ type ResultTx struct {
 	Index    uint32                 `json:"index"`
 	TxResult abci.ResponseDeliverTx `json:"tx_result"`
 	Tx       types.Tx               `json:"tx"`
-	Proof    types.TxProof          `json:"proof,omitempty"`
+	Proof    types.ShareProof       `json:"proof,omitempty"`
 }
 
 // Result of searching for txs

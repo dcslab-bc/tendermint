@@ -2,10 +2,10 @@ package client
 
 /*
 The client package provides a general purpose interface (Client) for connecting
-to a tendermint node, as well as higher-level functionality.
+to a CometBFT node, as well as higher-level functionality.
 
 The main implementation for production code is client.HTTP, which
-connects via http to the jsonrpc interface of the tendermint node.
+connects via http to the jsonrpc interface of the CometBFT node.
 
 For connecting to a node running in the same process (eg. when
 compiling the abci app in the same process), you can use the client.Local
@@ -65,11 +65,25 @@ type ABCIClient interface {
 // and prove anything about the chain.
 type SignClient interface {
 	Block(ctx context.Context, height *int64) (*ctypes.ResultBlock, error)
+	SignedBlock(ctx context.Context, height *int64) (*ctypes.ResultSignedBlock, error)
 	BlockByHash(ctx context.Context, hash []byte) (*ctypes.ResultBlock, error)
 	BlockResults(ctx context.Context, height *int64) (*ctypes.ResultBlockResults, error)
+	Header(ctx context.Context, height *int64) (*ctypes.ResultHeader, error)
+	HeaderByHash(ctx context.Context, hash bytes.HexBytes) (*ctypes.ResultHeader, error)
 	Commit(ctx context.Context, height *int64) (*ctypes.ResultCommit, error)
+
+	DataCommitment(ctx context.Context, start, end uint64) (*ctypes.ResultDataCommitment, error)
+	DataRootInclusionProof(
+		ctx context.Context,
+		height uint64,
+		start,
+		end uint64,
+	) (*ctypes.ResultDataRootInclusionProof, error)
+
 	Validators(ctx context.Context, height *int64, page, perPage *int) (*ctypes.ResultValidators, error)
 	Tx(ctx context.Context, hash []byte, prove bool) (*ctypes.ResultTx, error)
+
+	ProveShares(_ context.Context, height uint64, startShare uint64, endShare uint64) (types.ShareProof, error)
 
 	// TxSearch defines a method to search for a paginated set of transactions by
 	// DeliverTx event search criteria.
@@ -114,7 +128,7 @@ type NetworkClient interface {
 }
 
 // EventsClient is reactive, you can subscribe to any message, given the proper
-// string. see tendermint/types/events.go
+// string. see cometbft/types/events.go
 type EventsClient interface {
 	// Subscribe subscribes given subscriber to query. Returns a channel with
 	// cap=1 onto which events are published. An error is returned if it fails to

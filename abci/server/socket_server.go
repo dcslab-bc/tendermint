@@ -9,10 +9,10 @@ import (
 	"runtime"
 
 	"github.com/tendermint/tendermint/abci/types"
-	tmlog "github.com/tendermint/tendermint/libs/log"
-	tmnet "github.com/tendermint/tendermint/libs/net"
+	cmtlog "github.com/tendermint/tendermint/libs/log"
+	cmtnet "github.com/tendermint/tendermint/libs/net"
 	"github.com/tendermint/tendermint/libs/service"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
+	cmtsync "github.com/tendermint/tendermint/libs/sync"
 )
 
 // var maxNumberConnections = 2
@@ -25,16 +25,16 @@ type SocketServer struct {
 	addr     string
 	listener net.Listener
 
-	connsMtx   tmsync.Mutex
+	connsMtx   cmtsync.Mutex
 	conns      map[int]net.Conn
 	nextConnID int
 
-	appMtx tmsync.Mutex
+	appMtx cmtsync.Mutex
 	app    types.Application
 }
 
 func NewSocketServer(protoAddr string, app types.Application) service.Service {
-	proto, addr := tmnet.ProtocolAndAddress(protoAddr)
+	proto, addr := cmtnet.ProtocolAndAddress(protoAddr)
 	s := &SocketServer{
 		proto:    proto,
 		addr:     addr,
@@ -46,7 +46,7 @@ func NewSocketServer(protoAddr string, app types.Application) service.Service {
 	return s
 }
 
-func (s *SocketServer) SetLogger(l tmlog.Logger) {
+func (s *SocketServer) SetLogger(l cmtlog.Logger) {
 	s.BaseService.SetLogger(l)
 	s.isLoggerSet = true
 }
@@ -230,6 +230,12 @@ func (s *SocketServer) handleRequest(req *types.Request, responses chan<- *types
 	case *types.Request_OfferSnapshot:
 		res := s.app.OfferSnapshot(*r.OfferSnapshot)
 		responses <- types.ToResponseOfferSnapshot(res)
+	case *types.Request_PrepareProposal:
+		res := s.app.PrepareProposal(*r.PrepareProposal)
+		responses <- types.ToResponsePrepareProposal(res)
+	case *types.Request_ProcessProposal:
+		res := s.app.ProcessProposal(*r.ProcessProposal)
+		responses <- types.ToResponseProcessProposal(res)
 	case *types.Request_LoadSnapshotChunk:
 		res := s.app.LoadSnapshotChunk(*r.LoadSnapshotChunk)
 		responses <- types.ToResponseLoadSnapshotChunk(res)

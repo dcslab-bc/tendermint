@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/tendermint/tendermint/abci/types"
-	tmnet "github.com/tendermint/tendermint/libs/net"
+	cmtnet "github.com/tendermint/tendermint/libs/net"
 	"github.com/tendermint/tendermint/libs/service"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
+	cmtsync "github.com/tendermint/tendermint/libs/sync"
 	"github.com/tendermint/tendermint/libs/timer"
 )
 
@@ -34,7 +34,7 @@ type socketClient struct {
 	reqQueue   chan *ReqRes
 	flushTimer *timer.ThrottleTimer
 
-	mtx     tmsync.Mutex
+	mtx     cmtsync.Mutex
 	err     error
 	reqSent *list.List                            // list of requests sent, waiting for response
 	resCb   func(*types.Request, *types.Response) // called on all requests, if set.
@@ -68,7 +68,7 @@ func (cli *socketClient) OnStart() error {
 	)
 
 	for {
-		conn, err = tmnet.Connect(cli.addr)
+		conn, err = cmtnet.Connect(cli.addr)
 		if err != nil {
 			if cli.mustConnect {
 				return err
@@ -279,7 +279,17 @@ func (cli *socketClient) ApplySnapshotChunkAsync(req types.RequestApplySnapshotC
 	return cli.queueRequest(types.ToRequestApplySnapshotChunk(req))
 }
 
-//----------------------------------------
+func (cli *socketClient) PrepareProposalAsync(
+	req types.RequestPrepareProposal,
+) *ReqRes {
+	return cli.queueRequest(types.ToRequestPrepareProposal(req))
+}
+
+func (cli *socketClient) ProcessProposalAsync(
+	req types.RequestProcessProposal,
+) *ReqRes {
+	return cli.queueRequest(types.ToRequestProcessProposal(req))
+}
 
 func (cli *socketClient) FlushSync() error {
 	reqRes := cli.queueRequest(types.ToRequestFlush())
@@ -417,6 +427,28 @@ func (cli *socketClient) ApplySnapshotChunkSync(
 	return reqres.Response.GetApplySnapshotChunk(), cli.Error()
 }
 
+func (cli *socketClient) PrepareProposalSync(
+	req types.RequestPrepareProposal,
+) (*types.ResponsePrepareProposal, error) {
+
+	reqres := cli.queueRequest(types.ToRequestPrepareProposal(req))
+	if err := cli.FlushSync(); err != nil {
+		return nil, err
+	}
+	return reqres.Response.GetPrepareProposal(), nil
+}
+
+func (cli *socketClient) ProcessProposalSync(
+	req types.RequestProcessProposal,
+) (*types.ResponseProcessProposal, error) {
+
+	reqres := cli.queueRequest(types.ToRequestProcessProposal(req))
+	if err := cli.FlushSync(); err != nil {
+		return nil, err
+	}
+	return reqres.Response.GetProcessProposal(), nil
+}
+
 //----------------------------------------
 
 func (cli *socketClient) queueRequest(req *types.Request) *ReqRes {
@@ -492,6 +524,10 @@ func resMatchesReq(req *types.Request, res *types.Response) (ok bool) {
 		_, ok = res.Value.(*types.Response_ListSnapshots)
 	case *types.Request_OfferSnapshot:
 		_, ok = res.Value.(*types.Response_OfferSnapshot)
+	case *types.Request_PrepareProposal:
+		_, ok = res.Value.(*types.Response_PrepareProposal)
+	case *types.Request_ProcessProposal:
+		_, ok = res.Value.(*types.Response_ProcessProposal)
 	}
 	return ok
 }

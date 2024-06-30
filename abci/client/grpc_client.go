@@ -6,13 +6,15 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/net/context"
+	"context"
+
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/tendermint/tendermint/abci/types"
-	tmnet "github.com/tendermint/tendermint/libs/net"
+	cmtnet "github.com/tendermint/tendermint/libs/net"
 	"github.com/tendermint/tendermint/libs/service"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
+	cmtsync "github.com/tendermint/tendermint/libs/sync"
 )
 
 var _ Client = (*grpcClient)(nil)
@@ -27,7 +29,7 @@ type grpcClient struct {
 	conn     *grpc.ClientConn
 	chReqRes chan *ReqRes // dispatches "async" responses to callbacks *in order*, needed by mempool
 
-	mtx   tmsync.Mutex
+	mtx   cmtsync.Mutex
 	addr  string
 	err   error
 	resCb func(*types.Request, *types.Response) // listens to all callbacks
@@ -50,7 +52,7 @@ func NewGRPCClient(addr string, mustConnect bool) Client {
 }
 
 func dialerFunc(ctx context.Context, addr string) (net.Conn, error) {
-	return tmnet.Connect(addr)
+	return cmtnet.Connect(addr)
 }
 
 func (cli *grpcClient) OnStart() error {
@@ -87,8 +89,7 @@ func (cli *grpcClient) OnStart() error {
 
 RETRY_LOOP:
 	for {
-		//nolint:staticcheck // SA1019 Existing use of deprecated but supported dial option.
-		conn, err := grpc.Dial(cli.addr, grpc.WithInsecure(), grpc.WithContextDialer(dialerFunc))
+		conn, err := grpc.Dial(cli.addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(dialerFunc))
 		if err != nil {
 			if cli.mustConnect {
 				return err
@@ -300,6 +301,45 @@ func (cli *grpcClient) ApplySnapshotChunkAsync(params types.RequestApplySnapshot
 	return cli.finishAsyncCall(req, &types.Response{Value: &types.Response_ApplySnapshotChunk{ApplySnapshotChunk: res}})
 }
 
+func (cli *grpcClient) PrepareProposalAsync(
+	params types.RequestPrepareProposal,
+) *ReqRes {
+
+	req := types.ToRequestPrepareProposal(params)
+	res, err := cli.client.PrepareProposal(context.Background(), req.GetPrepareProposal(), grpc.WaitForReady(true))
+	if err != nil {
+		cli.StopForError(err)
+	}
+	return cli.finishAsyncCall(
+		req,
+		&types.Response{
+			Value: &types.Response_PrepareProposal{
+				PrepareProposal: res,
+			},
+		},
+	)
+}
+
+func (cli *grpcClient) ProcessProposalAsync(
+	params types.RequestProcessProposal,
+) *ReqRes {
+
+	req := types.ToRequestProcessProposal(params)
+	res, err := cli.client.ProcessProposal(context.Background(), req.GetProcessProposal(), grpc.WaitForReady(true))
+	if err != nil {
+		return nil
+	}
+
+	return cli.finishAsyncCall(
+		req,
+		&types.Response{
+			Value: &types.Response_ProcessProposal{
+				ProcessProposal: res,
+			},
+		},
+	)
+}
+
 // finishAsyncCall creates a ReqRes for an async call, and immediately populates it
 // with the response. We don't complete it until it's been ordered via the channel.
 func (cli *grpcClient) finishAsyncCall(req *types.Request, res *types.Response) *ReqRes {
@@ -416,4 +456,19 @@ func (cli *grpcClient) ApplySnapshotChunkSync(
 	params types.RequestApplySnapshotChunk) (*types.ResponseApplySnapshotChunk, error) {
 	reqres := cli.ApplySnapshotChunkAsync(params)
 	return cli.finishSyncCall(reqres).GetApplySnapshotChunk(), cli.Error()
+}
+
+func (cli *grpcClient) PrepareProposalSync(
+	params types.RequestPrepareProposal,
+) (*types.ResponsePrepareProposal, error) {
+
+	reqres := cli.PrepareProposalAsync(params)
+	return cli.finishSyncCall(reqres).GetPrepareProposal(), cli.Error()
+}
+
+func (cli *grpcClient) ProcessProposalSync(
+	params types.RequestProcessProposal,
+) (*types.ResponseProcessProposal, error) {
+	reqres := cli.ProcessProposalAsync(params)
+	return cli.finishSyncCall(reqres).GetProcessProposal(), cli.Error()
 }

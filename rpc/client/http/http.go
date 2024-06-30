@@ -8,11 +8,11 @@ import (
 	"time"
 
 	"github.com/tendermint/tendermint/libs/bytes"
-	tmjson "github.com/tendermint/tendermint/libs/json"
+	cmtjson "github.com/tendermint/tendermint/libs/json"
 	"github.com/tendermint/tendermint/libs/log"
-	tmpubsub "github.com/tendermint/tendermint/libs/pubsub"
+	cmtpubsub "github.com/tendermint/tendermint/libs/pubsub"
 	"github.com/tendermint/tendermint/libs/service"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
+	cmtsync "github.com/tendermint/tendermint/libs/sync"
 	rpcclient "github.com/tendermint/tendermint/rpc/client"
 	ctypes "github.com/tendermint/tendermint/rpc/core/types"
 	jsonrpcclient "github.com/tendermint/tendermint/rpc/jsonrpc/client"
@@ -20,16 +20,16 @@ import (
 )
 
 /*
-HTTP is a Client implementation that communicates with a Tendermint node over
+HTTP is a Client implementation that communicates with a CometBFT node over
 JSON RPC and WebSockets.
 
 This is the main implementation you probably want to use in production code.
-There are other implementations when calling the Tendermint node in-process
+There are other implementations when calling the CometBFT node in-process
 (Local), or when you want to mock out the server for test code (mock).
 
-You can subscribe for any event published by Tendermint using Subscribe method.
+You can subscribe for any event published by CometBFT using Subscribe method.
 Note delivery is best-effort. If you don't read events fast enough or network is
-slow, Tendermint might cancel the subscription. The client will attempt to
+slow, CometBFT might cancel the subscription. The client will attempt to
 resubscribe (you don't need to do anything). It will keep trying every second
 indefinitely until successful.
 
@@ -98,9 +98,11 @@ type baseRPCClient struct {
 	caller jsonrpcclient.Caller
 }
 
-var _ rpcClient = (*HTTP)(nil)
-var _ rpcClient = (*BatchHTTP)(nil)
-var _ rpcClient = (*baseRPCClient)(nil)
+var (
+	_ rpcClient = (*HTTP)(nil)
+	_ rpcClient = (*BatchHTTP)(nil)
+	_ rpcClient = (*baseRPCClient)(nil)
+)
 
 //-----------------------------------------------------------------------------
 // HTTP
@@ -416,6 +418,19 @@ func (c *baseRPCClient) Block(ctx context.Context, height *int64) (*ctypes.Resul
 	return result, nil
 }
 
+func (c *baseRPCClient) SignedBlock(ctx context.Context, height *int64) (*ctypes.ResultSignedBlock, error) {
+	result := new(ctypes.ResultSignedBlock)
+	params := make(map[string]interface{})
+	if height != nil {
+		params["height"] = height
+	}
+	_, err := c.caller.Call(ctx, "signed_block", params, result)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (c *baseRPCClient) BlockByHash(ctx context.Context, hash []byte) (*ctypes.ResultBlock, error) {
 	result := new(ctypes.ResultBlock)
 	params := map[string]interface{}{
@@ -444,6 +459,31 @@ func (c *baseRPCClient) BlockResults(
 	return result, nil
 }
 
+func (c *baseRPCClient) Header(ctx context.Context, height *int64) (*ctypes.ResultHeader, error) {
+	result := new(ctypes.ResultHeader)
+	params := make(map[string]interface{})
+	if height != nil {
+		params["height"] = height
+	}
+	_, err := c.caller.Call(ctx, "header", params, result)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (c *baseRPCClient) HeaderByHash(ctx context.Context, hash bytes.HexBytes) (*ctypes.ResultHeader, error) {
+	result := new(ctypes.ResultHeader)
+	params := map[string]interface{}{
+		"hash": hash,
+	}
+	_, err := c.caller.Call(ctx, "header_by_hash", params, result)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (c *baseRPCClient) Commit(ctx context.Context, height *int64) (*ctypes.ResultCommit, error) {
 	result := new(ctypes.ResultCommit)
 	params := make(map[string]interface{})
@@ -454,6 +494,46 @@ func (c *baseRPCClient) Commit(ctx context.Context, height *int64) (*ctypes.Resu
 	if err != nil {
 		return nil, err
 	}
+	return result, nil
+}
+
+func (c *baseRPCClient) DataCommitment(
+	ctx context.Context,
+	start uint64,
+	end uint64,
+) (*ctypes.ResultDataCommitment, error) {
+	result := new(ctypes.ResultDataCommitment)
+	params := map[string]interface{}{
+		"start": start,
+		"end":   end,
+	}
+
+	_, err := c.caller.Call(ctx, "data_commitment", params, result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func (c *baseRPCClient) DataRootInclusionProof(
+	ctx context.Context,
+	height uint64,
+	start uint64,
+	end uint64,
+) (*ctypes.ResultDataRootInclusionProof, error) {
+	result := new(ctypes.ResultDataRootInclusionProof)
+	params := map[string]interface{}{
+		"height": height,
+		"start":  start,
+		"end":    end,
+	}
+
+	_, err := c.caller.Call(ctx, "data_root_inclusion_proof", params, result)
+	if err != nil {
+		return nil, err
+	}
+
 	return result, nil
 }
 
@@ -468,6 +548,25 @@ func (c *baseRPCClient) Tx(ctx context.Context, hash []byte, prove bool) (*ctype
 		return nil, err
 	}
 	return result, nil
+}
+
+func (c *baseRPCClient) ProveShares(
+	ctx context.Context,
+	height uint64,
+	startShare uint64,
+	endShare uint64,
+) (types.ShareProof, error) {
+	result := new(types.ShareProof)
+	params := map[string]interface{}{
+		"height":     height,
+		"startShare": startShare,
+		"endShare":   endShare,
+	}
+	_, err := c.caller.Call(ctx, "prove_shares", params, result)
+	if err != nil {
+		return types.ShareProof{}, err
+	}
+	return *result, nil
 }
 
 func (c *baseRPCClient) TxSearch(
@@ -577,7 +676,7 @@ type WSEvents struct {
 	endpoint string
 	ws       *jsonrpcclient.WSClient
 
-	mtx           tmsync.RWMutex
+	mtx           cmtsync.RWMutex
 	subscriptions map[string]chan ctypes.ResultEvent // query -> chan
 }
 
@@ -645,7 +744,7 @@ func (w *WSEvents) Subscribe(ctx context.Context, subscriber, query string,
 
 	outc := make(chan ctypes.ResultEvent, outCap)
 	w.mtx.Lock()
-	// subscriber param is ignored because Tendermint will override it with
+	// subscriber param is ignored because CometBFT will override it with
 	// remote IP anyway.
 	w.subscriptions[query] = outc
 	w.mtx.Unlock()
@@ -712,7 +811,7 @@ func (w *WSEvents) redoSubscriptionsAfter(d time.Duration) {
 }
 
 func isErrAlreadySubscribed(err error) bool {
-	return strings.Contains(err.Error(), tmpubsub.ErrAlreadySubscribed.Error())
+	return strings.Contains(err.Error(), cmtpubsub.ErrAlreadySubscribed.Error())
 }
 
 func (w *WSEvents) eventListener() {
@@ -726,11 +825,11 @@ func (w *WSEvents) eventListener() {
 			if resp.Error != nil {
 				w.Logger.Error("WS error", "err", resp.Error.Error())
 				// Error can be ErrAlreadySubscribed or max client (subscriptions per
-				// client) reached or Tendermint exited.
+				// client) reached or CometBFT exited.
 				// We can ignore ErrAlreadySubscribed, but need to retry in other
 				// cases.
 				if !isErrAlreadySubscribed(resp.Error) {
-					// Resubscribe after 1 second to give Tendermint time to restart (if
+					// Resubscribe after 1 second to give CometBFT time to restart (if
 					// crashed).
 					w.redoSubscriptionsAfter(1 * time.Second)
 				}
@@ -738,7 +837,7 @@ func (w *WSEvents) eventListener() {
 			}
 
 			result := new(ctypes.ResultEvent)
-			err := tmjson.Unmarshal(resp.Result, result)
+			err := cmtjson.Unmarshal(resp.Result, result)
 			if err != nil {
 				w.Logger.Error("failed to unmarshal response", "err", err)
 				continue

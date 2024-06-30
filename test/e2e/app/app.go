@@ -34,7 +34,7 @@ type Application struct {
 // Config allows for the setting of high level parameters for running the e2e Application
 // KeyType and ValidatorUpdates must be the same for all nodes running the same application.
 type Config struct {
-	// The directory with which state.json will be persisted in. Usually $HOME/.tendermint/data
+	// The directory with which state.json will be persisted in. Usually $HOME/.cometbft/data
 	Dir string `toml:"dir"`
 
 	// SnapshotInterval specifies the height interval at which the application
@@ -255,6 +255,16 @@ func (app *Application) ApplySnapshotChunk(req abci.RequestApplySnapshotChunk) a
 		app.restoreChunks = nil
 	}
 	return abci.ResponseApplySnapshotChunk{Result: abci.ResponseApplySnapshotChunk_ACCEPT}
+}
+
+func (app *Application) PrepareProposal(
+	req abci.RequestPrepareProposal) abci.ResponsePrepareProposal {
+	return abci.ResponsePrepareProposal{BlockData: req.BlockData}
+}
+
+func (app *Application) ProcessProposal(
+	req abci.RequestProcessProposal) abci.ResponseProcessProposal {
+	return abci.ResponseProcessProposal{Result: abci.ResponseProcessProposal_ACCEPT}
 }
 
 func (app *Application) Rollback() error {

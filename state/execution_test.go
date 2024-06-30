@@ -1,14 +1,23 @@
 package state_test
 
 import (
+	"bytes"
 	"context"
+	"io"
+
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	db "github.com/cometbft/cometbft-db"
 	abci "github.com/tendermint/tendermint/abci/types"
 	"github.com/tendermint/tendermint/crypto"
 	"github.com/tendermint/tendermint/crypto/ed25519"
@@ -16,13 +25,15 @@ import (
 	"github.com/tendermint/tendermint/crypto/tmhash"
 	"github.com/tendermint/tendermint/libs/log"
 	mmock "github.com/tendermint/tendermint/mempool/mock"
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	tmversion "github.com/tendermint/tendermint/proto/tendermint/version"
+	cmtproto "github.com/tendermint/tendermint/proto/tendermint/types"
+	cmtversion "github.com/tendermint/tendermint/proto/tendermint/version"
 	"github.com/tendermint/tendermint/proxy"
 	sm "github.com/tendermint/tendermint/state"
 	"github.com/tendermint/tendermint/state/mocks"
+	sf "github.com/tendermint/tendermint/state/test/factory"
+	"github.com/tendermint/tendermint/test/factory"
 	"github.com/tendermint/tendermint/types"
-	tmtime "github.com/tendermint/tendermint/types/time"
+	cmttime "github.com/tendermint/tendermint/types/time"
 	"github.com/tendermint/tendermint/version"
 )
 
@@ -30,6 +41,8 @@ var (
 	chainID             = "execution_chain"
 	testPartSize uint32 = 65536
 	nTxsPerBlock        = 10
+	namespace           = "namespace"
+	height              = 1
 )
 
 func TestApplyBlock(t *testing.T) {
@@ -51,7 +64,7 @@ func TestApplyBlock(t *testing.T) {
 	block := makeBlock(state, 1)
 	blockID := types.BlockID{Hash: block.Hash(), PartSetHeader: block.MakePartSet(testPartSize).Header()}
 
-	state, retainHeight, err := blockExec.ApplyBlock(state, blockID, block)
+	state, retainHeight, err := blockExec.ApplyBlock(state, blockID, block, nil)
 	require.Nil(t, err)
 	assert.EqualValues(t, retainHeight, 1)
 
@@ -78,7 +91,7 @@ func TestBeginBlockValidators(t *testing.T) {
 	prevBlockID := types.BlockID{Hash: prevHash, PartSetHeader: prevParts}
 
 	var (
-		now        = tmtime.Now()
+		now        = cmttime.Now()
 		commitSig0 = types.NewCommitSigForBlock(
 			[]byte("Signature1"),
 			state.Validators.Validators[0].Address,
@@ -104,7 +117,13 @@ func TestBeginBlockValidators(t *testing.T) {
 		lastCommit := types.NewCommit(1, 0, prevBlockID, tc.lastCommitSigs)
 
 		// block for height 2
-		block, _ := state.MakeBlock(2, makeTxs(2), lastCommit, nil, state.Validators.GetProposer().Address)
+		block, _ := state.MakeBlock(
+			2,
+			factory.MakeData(factory.MakeTenTxs(2)),
+			lastCommit,
+			nil,
+			state.Validators.GetProposer().Address,
+		)
 
 		_, err = sm.ExecCommitBlock(proxyApp.Consensus(), block, log.TestingLogger(), stateStore, 1)
 		require.Nil(t, err, tc.desc)
@@ -142,7 +161,7 @@ func TestBeginBlockByzantineValidators(t *testing.T) {
 	privVal := privVals[state.Validators.Validators[0].Address.String()]
 	blockID := makeBlockID([]byte("headerhash"), 1000, []byte("partshash"))
 	header := &types.Header{
-		Version:            tmversion.Consensus{Block: version.BlockProtocol, App: 1},
+		Version:            cmtversion.Consensus{Block: version.BlockProtocol, App: 1},
 		ChainID:            state.ChainID,
 		Height:             10,
 		Time:               defaultEvidenceTime,
@@ -212,12 +231,132 @@ func TestBeginBlockByzantineValidators(t *testing.T) {
 	block.Header.EvidenceHash = block.Evidence.Hash()
 	blockID = types.BlockID{Hash: block.Hash(), PartSetHeader: block.MakePartSet(testPartSize).Header()}
 
-	state, retainHeight, err := blockExec.ApplyBlock(state, blockID, block)
+	state, retainHeight, err := blockExec.ApplyBlock(state, blockID, block, nil)
 	require.Nil(t, err)
 	assert.EqualValues(t, retainHeight, 1)
 
 	// TODO check state and mempool
 	assert.Equal(t, abciEv, app.ByzantineValidators)
+}
+
+func TestProcessProposal(t *testing.T) {
+	height := 1
+	runTest := func(txs types.Txs, expectAccept bool) {
+		app := &testApp{}
+		cc := proxy.NewLocalClientCreator(app)
+		proxyApp := proxy.NewAppConns(cc)
+		err := proxyApp.Start()
+		require.Nil(t, err)
+		defer proxyApp.Stop() //nolint:errcheck // ignore for tests
+
+		state, stateDB, _ := makeState(1, height)
+		stateStore := sm.NewStore(stateDB, sm.StoreOptions{
+			DiscardABCIResponses: false,
+		})
+
+		blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyApp.Consensus(),
+			mmock.Mempool{}, sm.EmptyEvidencePool{})
+
+		block := sf.MakeBlock(state, int64(height), new(types.Commit))
+		block.Txs = txs
+		acceptBlock, err := blockExec.ProcessProposal(block)
+		require.Nil(t, err)
+		require.Equal(t, expectAccept, acceptBlock)
+	}
+	goodTxs := factory.MakeTenTxs(int64(height))
+	runTest(goodTxs, true)
+	// testApp has process proposal fail if any tx is 0-len
+	badTxs := factory.MakeTenTxs(int64(height))
+	badTxs[0] = types.Tx{}
+	runTest(badTxs, false)
+}
+
+func TestProcessProposalRejectedMetric(t *testing.T) {
+	server := httptest.NewServer(promhttp.Handler())
+	defer server.Close()
+
+	getPrometheusOutput := func() string {
+		resp, err := http.Get(server.URL)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		buf, _ := io.ReadAll(resp.Body)
+		return string(buf)
+	}
+	metrics := sm.PrometheusMetrics(namespace)
+	state, stateDB, _ := makeState(1, height)
+
+	accptedBlock := makeAcceptedBlock(state, height)
+	rejectedBlock := makeRejectedBlock(state, height)
+
+	type testCase struct {
+		name                             string
+		block                            *types.Block
+		wantProcessProposalRejectedCount int
+	}
+	tests := []testCase{
+		// HACKHACK since Prometheus metrics are registered globally, these
+		// tests cases are ordering dependent. In other words, since the counter
+		// metric type is monotonically increasing, the expected metric count of
+		// a test case is the cumulative sum of the metric count in previous
+		// test cases.
+		{"accepted block has a process proposal rejected count of 0", accptedBlock, 0},
+		{"rejected block has a process proposal rejected count of 1", rejectedBlock, 1},
+	}
+
+	for _, test := range tests {
+		blockExec := makeBlockExec(t, test.name, test.block, stateDB, metrics)
+
+		_, err := blockExec.ProcessProposal(test.block)
+		require.Nil(t, err, test.name)
+
+		prometheusOutput := getPrometheusOutput()
+		got := getProcessProposalRejectedCount(t, prometheusOutput)
+
+		require.Equal(t, got, test.wantProcessProposalRejectedCount, test.name)
+	}
+}
+
+func makeBlockExec(t *testing.T, testName string, block *types.Block, stateDB db.DB,
+	metrics *sm.Metrics) (blockExec *sm.BlockExecutor) {
+	app := &testApp{}
+	clientCreator := proxy.NewLocalClientCreator(app)
+	proxyApp := proxy.NewAppConns(clientCreator)
+
+	err := proxyApp.Start()
+	require.Nil(t, err, testName)
+
+	defer func() {
+		err := proxyApp.Stop()
+		require.Nil(t, err, testName)
+	}()
+
+	return sm.NewBlockExecutor(
+		sm.NewStore(stateDB, sm.StoreOptions{
+			DiscardABCIResponses: false,
+		}),
+		log.TestingLogger(),
+		proxyApp.Consensus(),
+		mmock.Mempool{},
+		sm.EmptyEvidencePool{},
+		sm.BlockExecutorWithMetrics(metrics),
+	)
+}
+
+func getProcessProposalRejectedCount(t *testing.T, prometheusOutput string) (count int) {
+	metricName := strings.Join([]string{namespace, sm.MetricsSubsystem, "process_proposal_rejected"}, "_")
+	lines := strings.Split(prometheusOutput, "\n")
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, metricName) {
+			parts := strings.Split(line, " ")
+			count, err := strconv.Atoi(parts[1])
+			require.Nil(t, err)
+			return count
+		}
+	}
+
+	return 0
 }
 
 func TestValidateValidatorUpdates(t *testing.T) {
@@ -228,13 +367,13 @@ func TestValidateValidatorUpdates(t *testing.T) {
 	pk2, err := cryptoenc.PubKeyToProto(pubkey2)
 	assert.NoError(t, err)
 
-	defaultValidatorParams := tmproto.ValidatorParams{PubKeyTypes: []string{types.ABCIPubKeyTypeEd25519}}
+	defaultValidatorParams := cmtproto.ValidatorParams{PubKeyTypes: []string{types.ABCIPubKeyTypeEd25519}}
 
 	testCases := []struct {
 		name string
 
 		abciUpdates     []abci.ValidatorUpdate
-		validatorParams tmproto.ValidatorParams
+		validatorParams cmtproto.ValidatorParams
 
 		shouldErr bool
 	}{
@@ -396,7 +535,7 @@ func TestEndBlockValidatorUpdates(t *testing.T) {
 		{PubKey: pk, Power: 10},
 	}
 
-	state, _, err = blockExec.ApplyBlock(state, blockID, block)
+	state, _, err = blockExec.ApplyBlock(state, blockID, block, nil)
 	require.Nil(t, err)
 	// test new validator was added to NextValidators
 	if assert.Equal(t, state.Validators.Size()+1, state.NextValidators.Size()) {
@@ -454,9 +593,76 @@ func TestEndBlockValidatorUpdatesResultingInEmptySet(t *testing.T) {
 		{PubKey: vp, Power: 0},
 	}
 
-	assert.NotPanics(t, func() { state, _, err = blockExec.ApplyBlock(state, blockID, block) })
+	assert.NotPanics(t, func() { state, _, err = blockExec.ApplyBlock(state, blockID, block, nil) })
 	assert.NotNil(t, err)
 	assert.NotEmpty(t, state.NextValidators.Validators)
+}
+
+func TestFireEventSignedBlockEvent(t *testing.T) {
+	app := &testApp{}
+	cc := proxy.NewLocalClientCreator(app)
+	proxyApp := proxy.NewAppConns(cc)
+	err := proxyApp.Start()
+	require.NoError(t, err)
+	defer proxyApp.Stop() //nolint:errcheck // ignore for tests
+
+	state, stateDB, _ := makeState(2, 1)
+	// modify the current validators so it's different to the last validators
+	state.Validators.Validators[0].VotingPower = 10
+	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
+		DiscardABCIResponses: false,
+	})
+	blockExec := sm.NewBlockExecutor(
+		stateStore,
+		log.TestingLogger(),
+		proxyApp.Consensus(),
+		mmock.Mempool{},
+		sm.EmptyEvidencePool{},
+	)
+	eventBus := types.NewEventBus()
+	err = eventBus.Start()
+	require.NoError(t, err)
+	defer eventBus.Stop() //nolint:errcheck
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sub, err := eventBus.Subscribe(ctx, "test-client", types.EventQueryNewSignedBlock)
+	require.NoError(t, err)
+	blockExec.SetEventBus(eventBus)
+
+	block := makeBlock(state, 1)
+	blockID := types.BlockID{Hash: block.Hash(), PartSetHeader: block.MakePartSet(testPartSize).Header()}
+
+	commit := &types.Commit{
+		Height:  block.Height,
+		Round:   0,
+		BlockID: blockID,
+		Signatures: []types.CommitSig{
+			types.NewCommitSigAbsent(),
+		},
+	}
+
+	state, _, err = blockExec.ApplyBlock(state, blockID, block, commit)
+	require.NoError(t, err)
+
+	select {
+	case msg := <-sub.Out():
+		signedBlock, ok := msg.Data().(types.EventDataSignedBlock)
+		require.True(t, ok)
+
+		// check that the published data are all from the same height
+		if signedBlock.Header.Height != signedBlock.Commit.Height {
+			t.Fatalf("expected commit height and header height to match")
+		}
+
+		if valHash := signedBlock.ValidatorSet.Hash(); !bytes.Equal(signedBlock.Header.ValidatorsHash, valHash) {
+			t.Fatalf("expected validator hashes to match")
+		}
+	case <-sub.Cancelled():
+		t.Fatalf("subscription was unexpectedly cancelled")
+	case <-time.After(5 * time.Second):
+		t.Fatalf("test timed out waiting for signed block")
+	}
 }
 
 func makeBlockID(hash []byte, partSetSize uint32, partSetHash []byte) types.BlockID {
@@ -473,4 +679,17 @@ func makeBlockID(hash []byte, partSetSize uint32, partSetHash []byte) types.Bloc
 			Hash:  psH,
 		},
 	}
+}
+
+func makeAcceptedBlock(state sm.State, height int) (block *types.Block) {
+	block = sf.MakeBlock(state, int64(height), new(types.Commit))
+	goodTxs := factory.MakeTenTxs(int64(height))
+	block.Txs = goodTxs
+	return block
+}
+
+func makeRejectedBlock(state sm.State, height int) (block *types.Block) {
+	block = makeAcceptedBlock(state, height)
+	block.Txs[0] = types.Tx{}
+	return block
 }

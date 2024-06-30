@@ -9,16 +9,17 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	dbm "github.com/tendermint/tm-db"
+	dbm "github.com/cometbft/cometbft-db"
 
 	"github.com/tendermint/tendermint/evidence"
 	"github.com/tendermint/tendermint/evidence/mocks"
 	"github.com/tendermint/tendermint/libs/log"
-	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
-	tmversion "github.com/tendermint/tendermint/proto/tendermint/version"
+	cmtproto "github.com/tendermint/tendermint/proto/tendermint/types"
+	cmtversion "github.com/tendermint/tendermint/proto/tendermint/version"
 	sm "github.com/tendermint/tendermint/state"
 	smmocks "github.com/tendermint/tendermint/state/mocks"
 	"github.com/tendermint/tendermint/store"
+	"github.com/tendermint/tendermint/test/factory"
 	"github.com/tendermint/tendermint/types"
 	"github.com/tendermint/tendermint/version"
 )
@@ -192,7 +193,8 @@ func TestEvidencePoolUpdate(t *testing.T) {
 	ev := types.NewMockDuplicateVoteEvidenceWithValidator(height, defaultEvidenceTime.Add(21*time.Minute),
 		val, evidenceChainID)
 	lastCommit := makeCommit(height, val.PrivKey.PubKey().Address())
-	block := types.MakeBlock(height+1, []types.Tx{}, lastCommit, []types.Evidence{ev})
+	block := types.MakeBlock(height+1, factory.MakeData([]types.Tx{}), lastCommit, []types.Evidence{ev})
+
 	// update state (partially)
 	state.LastBlockHeight = height + 1
 	state.LastBlockTime = defaultEvidenceTime.Add(22 * time.Minute)
@@ -325,12 +327,12 @@ func TestRecoverPendingEvidence(t *testing.T) {
 	newStateStore.On("Load").Return(sm.State{
 		LastBlockTime:   defaultEvidenceTime.Add(25 * time.Minute),
 		LastBlockHeight: height + 15,
-		ConsensusParams: tmproto.ConsensusParams{
-			Block: tmproto.BlockParams{
+		ConsensusParams: cmtproto.ConsensusParams{
+			Block: cmtproto.BlockParams{
 				MaxBytes: 22020096,
 				MaxGas:   -1,
 			},
-			Evidence: tmproto.EvidenceParams{
+			Evidence: cmtproto.EvidenceParams{
 				MaxAgeNumBlocks: 20,
 				MaxAgeDuration:  20 * time.Minute,
 				MaxBytes:        defaultEvidenceMaxBytes,
@@ -360,12 +362,12 @@ func initializeStateFromValidatorSet(valSet *types.ValidatorSet, height int64) s
 		NextValidators:              valSet.CopyIncrementProposerPriority(1),
 		LastValidators:              valSet,
 		LastHeightValidatorsChanged: 1,
-		ConsensusParams: tmproto.ConsensusParams{
-			Block: tmproto.BlockParams{
+		ConsensusParams: cmtproto.ConsensusParams{
+			Block: cmtproto.BlockParams{
 				MaxBytes: 22020096,
 				MaxGas:   -1,
 			},
-			Evidence: tmproto.EvidenceParams{
+			Evidence: cmtproto.EvidenceParams{
 				MaxAgeNumBlocks: 20,
 				MaxAgeDuration:  20 * time.Minute,
 				MaxBytes:        1000,
@@ -405,10 +407,10 @@ func initializeBlockStore(db dbm.DB, state sm.State, valAddr []byte) *store.Bloc
 
 	for i := int64(1); i <= state.LastBlockHeight; i++ {
 		lastCommit := makeCommit(i-1, valAddr)
-		block, _ := state.MakeBlock(i, []types.Tx{}, lastCommit, nil,
+		block, _ := state.MakeBlock(i, factory.MakeData([]types.Tx{}), lastCommit, nil,
 			state.Validators.GetProposer().Address)
 		block.Header.Time = defaultEvidenceTime.Add(time.Duration(i) * time.Minute)
-		block.Header.Version = tmversion.Consensus{Block: version.BlockProtocol, App: 1}
+		block.Header.Version = cmtversion.Consensus{Block: version.BlockProtocol, App: 1}
 		const parts = 1
 		partSet := block.MakePartSet(parts)
 

@@ -3,12 +3,13 @@ package core
 import (
 	"encoding/base64"
 	"fmt"
+	"sync"
 	"time"
 
 	cfg "github.com/tendermint/tendermint/config"
 	"github.com/tendermint/tendermint/consensus"
 	"github.com/tendermint/tendermint/crypto"
-	tmjson "github.com/tendermint/tendermint/libs/json"
+	cmtjson "github.com/tendermint/tendermint/libs/json"
 	"github.com/tendermint/tendermint/libs/log"
 	mempl "github.com/tendermint/tendermint/mempool"
 	"github.com/tendermint/tendermint/p2p"
@@ -35,13 +36,23 @@ const (
 
 var (
 	// set by Node
-	env *Environment
+	mut       = &sync.Mutex{}
+	globalEnv *Environment
 )
 
-// SetEnvironment sets up the given Environment.
-// It will race if multiple Node call SetEnvironment.
+// SetEnvironment sets the global environment to e. The globalEnv var that this
+// function modifies is protected by a sync.Once so multiple calls within the
+// same process will not be effective.
 func SetEnvironment(e *Environment) {
-	env = e
+	mut.Lock()
+	defer mut.Unlock()
+	globalEnv = e
+}
+
+func GetEnvironment() *Environment {
+	mut.Lock()
+	defer mut.Unlock()
+	return globalEnv
 }
 
 //----------------------------------------------
@@ -142,19 +153,20 @@ func validatePerPage(perPagePtr *int) int {
 // InitGenesisChunks configures the environment and should be called on service
 // startup.
 func InitGenesisChunks() error {
-	if env.genChunks != nil {
+	if GetEnvironment().genChunks != nil {
 		return nil
 	}
 
-	if env.GenDoc == nil {
+	if GetEnvironment().GenDoc == nil {
 		return nil
 	}
 
-	data, err := tmjson.Marshal(env.GenDoc)
+	data, err := cmtjson.Marshal(GetEnvironment().GenDoc)
 	if err != nil {
 		return err
 	}
-
+	mut.Lock()
+	defer mut.Unlock()
 	for i := 0; i < len(data); i += genesisChunkSize {
 		end := i + genesisChunkSize
 
@@ -162,7 +174,7 @@ func InitGenesisChunks() error {
 			end = len(data)
 		}
 
-		env.genChunks = append(env.genChunks, base64.StdEncoding.EncodeToString(data[i:end]))
+		globalEnv.genChunks = append(globalEnv.genChunks, base64.StdEncoding.EncodeToString(data[i:end]))
 	}
 
 	return nil
@@ -188,7 +200,7 @@ func getHeight(latestHeight int64, heightPtr *int64) (int64, error) {
 			return 0, fmt.Errorf("height %d must be less than or equal to the current blockchain height %d",
 				height, latestHeight)
 		}
-		base := env.BlockStore.Base()
+		base := GetEnvironment().BlockStore.Base()
 		if height < base {
 			return 0, fmt.Errorf("height %d is not available, lowest height is %d",
 				height, base)
@@ -199,6 +211,7 @@ func getHeight(latestHeight int64, heightPtr *int64) (int64, error) {
 }
 
 func latestUncommittedHeight() int64 {
+	env := GetEnvironment()
 	nodeIsSyncing := env.ConsensusReactor.WaitSync()
 	if nodeIsSyncing {
 		return env.BlockStore.Height()

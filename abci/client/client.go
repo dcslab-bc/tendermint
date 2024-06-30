@@ -6,13 +6,15 @@ import (
 
 	"github.com/tendermint/tendermint/abci/types"
 	"github.com/tendermint/tendermint/libs/service"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
+	cmtsync "github.com/tendermint/tendermint/libs/sync"
 )
 
 const (
 	dialRetryIntervalSeconds = 3
 	echoRetryIntervalSeconds = 1
 )
+
+//go:generate ../../scripts/mockery_generate.sh Client
 
 // Client defines an interface for an ABCI client.
 // All `Async` methods return a `ReqRes` object.
@@ -56,6 +58,8 @@ type Client interface {
 	OfferSnapshotSync(types.RequestOfferSnapshot) (*types.ResponseOfferSnapshot, error)
 	LoadSnapshotChunkSync(types.RequestLoadSnapshotChunk) (*types.ResponseLoadSnapshotChunk, error)
 	ApplySnapshotChunkSync(types.RequestApplySnapshotChunk) (*types.ResponseApplySnapshotChunk, error)
+	PrepareProposalSync(types.RequestPrepareProposal) (*types.ResponsePrepareProposal, error)
+	ProcessProposalSync(types.RequestProcessProposal) (*types.ResponseProcessProposal, error)
 }
 
 //----------------------------------------
@@ -81,7 +85,7 @@ type ReqRes struct {
 	*sync.WaitGroup
 	*types.Response // Not set atomically, so be sure to use WaitGroup.
 
-	mtx tmsync.Mutex
+	mtx cmtsync.Mutex
 
 	// callbackInvoked as a variable to track if the callback was already
 	// invoked during the regular execution of the request. This variable
