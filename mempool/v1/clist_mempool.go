@@ -1,3 +1,7 @@
+// This file has been added for fixing a compile error.
+// The priority mempool (v1) has been deprecated in CometBFT.
+// Thus, we don't need to take care of all v2 files for now.
+
 package v0
 
 import (
