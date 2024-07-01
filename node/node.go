@@ -35,7 +35,6 @@ import (
 	mempl "github.com/tendermint/tendermint/mempool"
 	mempoolv2 "github.com/tendermint/tendermint/mempool/cat"
 	mempoolv0 "github.com/tendermint/tendermint/mempool/v0"
-	mempoolv1 "github.com/tendermint/tendermint/mempool/v1"
 	"github.com/tendermint/tendermint/p2p"
 	"github.com/tendermint/tendermint/p2p/pex"
 	"github.com/tendermint/tendermint/privval"
@@ -381,58 +380,6 @@ func createMempoolAndMempoolReactor(
 	traceClient *trace.Client,
 ) (mempl.Mempool, p2p.Reactor) {
 	switch config.Mempool.Version {
-	case cfg.MempoolV2:
-		mp := mempoolv2.NewTxPool(
-			logger,
-			config.Mempool,
-			proxyApp.Mempool(),
-			state.LastBlockHeight,
-			mempoolv2.WithMetrics(memplMetrics),
-			mempoolv2.WithPreCheck(sm.TxPreCheck(state)),
-			mempoolv2.WithPostCheck(sm.TxPostCheck(state)),
-		)
-
-		reactor, err := mempoolv2.NewReactor(
-			mp,
-			&mempoolv2.ReactorOptions{
-				ListenOnly:  !config.Mempool.Broadcast,
-				MaxTxSize:   config.Mempool.MaxTxBytes,
-				TraceClient: traceClient,
-			},
-		)
-		if err != nil {
-			// TODO: find a more polite way of handling this error
-			panic(err)
-		}
-		if config.Consensus.WaitForTxs() {
-			mp.EnableTxsAvailable()
-		}
-		reactor.SetLogger(logger)
-
-		return mp, reactor
-	case cfg.MempoolV1:
-		mp := mempoolv1.NewTxMempool(
-			logger,
-			config.Mempool,
-			proxyApp.Mempool(),
-			state.LastBlockHeight,
-			mempoolv1.WithMetrics(memplMetrics),
-			mempoolv1.WithPreCheck(sm.TxPreCheck(state)),
-			mempoolv1.WithPostCheck(sm.TxPostCheck(state)),
-		)
-
-		reactor := mempoolv1.NewReactor(
-			config.Mempool,
-			mp,
-			traceClient,
-		)
-		if config.Consensus.WaitForTxs() {
-			mp.EnableTxsAvailable()
-		}
-		reactor.SetLogger(logger)
-
-		return mp, reactor
-
 	case cfg.MempoolV0:
 		mp := mempoolv0.NewCListMempool(
 			config.Mempool,

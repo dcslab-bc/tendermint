@@ -318,12 +318,12 @@ func (blockExec *BlockExecutor) Commit(
 		"height", block.Height,
 		"num_txs", len(block.Txs),
 		"app_hash", fmt.Sprintf("%X", res.Data),
+		"timestamp:", time.Now().Format("15:04:05.000"),
 	)
 
 	// Update mempool.
 	err = blockExec.mempool.Update(
-		block.Height,
-		block.Txs,
+		block,
 		deliverTxResponses,
 		TxPreCheck(state),
 		TxPostCheck(state),

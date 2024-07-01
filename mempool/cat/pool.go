@@ -19,7 +19,7 @@ import (
 )
 
 // enforce compile-time satisfaction of the Mempool interface
-var _ mempool.Mempool = (*TxPool)(nil)
+var _ mempool.Mempool = (*CListMempool)(nil)
 
 var (
 	ErrTxInMempool       = errors.New("tx already exists in mempool")
@@ -106,25 +106,6 @@ func NewTxPool(
 	}
 
 	return txmp
-}
-
-// WithPreCheck sets a filter for the mempool to reject a transaction if f(tx)
-// returns an error. This is executed before CheckTx. It only applies to the
-// first created block. After that, Update() overwrites the existing value.
-func WithPreCheck(f mempool.PreCheckFunc) TxPoolOption {
-	return func(txmp *TxPool) { txmp.preCheckFn = f }
-}
-
-// WithPostCheck sets a filter for the mempool to reject a transaction if
-// f(tx, resp) returns an error. This is executed after CheckTx. It only applies
-// to the first created block. After that, Update overwrites the existing value.
-func WithPostCheck(f mempool.PostCheckFunc) TxPoolOption {
-	return func(txmp *TxPool) { txmp.postCheckFn = f }
-}
-
-// WithMetrics sets the mempool's metrics collector.
-func WithMetrics(metrics *mempool.Metrics) TxPoolOption {
-	return func(txmp *TxPool) { txmp.metrics = metrics }
 }
 
 // Lock is a noop as ABCI calls are serialized

@@ -1,4 +1,4 @@
-package v1
+package v0
 
 import (
 	"fmt"
@@ -19,7 +19,7 @@ import (
 	"github.com/tendermint/tendermint/types"
 )
 
-var _ mempool.Mempool = (*TxMempool)(nil)
+var _ mempool.Mempool = (*CListMempool)(nil)
 
 // TxMempoolOption sets an optional parameter on the TxMempool.
 type TxMempoolOption func(*TxMempool)
@@ -89,25 +89,6 @@ func NewTxMempool(
 	}
 
 	return txmp
-}
-
-// WithPreCheck sets a filter for the mempool to reject a transaction if f(tx)
-// returns an error. This is executed before CheckTx. It only applies to the
-// first created block. After that, Update() overwrites the existing value.
-func WithPreCheck(f mempool.PreCheckFunc) TxMempoolOption {
-	return func(txmp *TxMempool) { txmp.preCheck = f }
-}
-
-// WithPostCheck sets a filter for the mempool to reject a transaction if
-// f(tx, resp) returns an error. This is executed after CheckTx. It only applies
-// to the first created block. After that, Update overwrites the existing value.
-func WithPostCheck(f mempool.PostCheckFunc) TxMempoolOption {
-	return func(txmp *TxMempool) { txmp.postCheck = f }
-}
-
-// WithMetrics sets the mempool's metrics collector.
-func WithMetrics(metrics *mempool.Metrics) TxMempoolOption {
-	return func(txmp *TxMempool) { txmp.metrics = metrics }
 }
 
 // Lock obtains a write-lock on the mempool. A caller must be sure to explicitly

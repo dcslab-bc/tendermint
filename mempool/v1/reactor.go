@@ -1,4 +1,4 @@
-package v1
+package v0
 
 import (
 	"errors"
@@ -94,12 +94,11 @@ func newMempoolIDs() *mempoolIDs {
 }
 
 // NewReactor returns a new Reactor with the given config and mempool.
-func NewReactor(config *cfg.MempoolConfig, mempool *TxMempool, traceClient *trace.Client) *Reactor {
+func NewReactor(config *cfg.MempoolConfig, mempool *TxMempool) *Reactor {
 	memR := &Reactor{
-		config:      config,
-		mempool:     mempool,
-		ids:         newMempoolIDs(),
-		traceClient: traceClient,
+		config:  config,
+		mempool: mempool,
+		ids:     newMempoolIDs(),
 	}
 	memR.BaseReactor = *p2p.NewBaseReactor("Mempool", memR)
 	return memR
