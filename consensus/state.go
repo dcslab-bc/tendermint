@@ -1599,6 +1599,7 @@ func (cs *State) finalizeCommit(height int64) {
 		"hash", log.NewLazyBlockHash(block),
 		"root", block.AppHash,
 		"num_txs", len(block.Txs),
+		"timestamp:", time.Now().Format("15:04:05.000"),
 	)
 	logger.Debug("committed block", "block", log.NewLazySprintf("%v", block))
 
