@@ -97,6 +97,17 @@ func (app *localClient) DeliverTxAsync(params types.RequestDeliverTx) *ReqRes {
 	)
 }
 
+// updated by mssong
+func (app *localClient) AnteVerifyTxAsync(params types.RequestAnteVerifyTx) *ReqRes {
+	//mssong - here
+	res := app.Application.AnteVerifyTx(params)
+	return app.callback(
+		types.ToRequestAnteVerifyTx(params),
+		types.ToResponseAnteVerifyTx(res),
+	)
+	// return nil
+}
+
 func (app *localClient) CheckTxAsync(req types.RequestCheckTx) *ReqRes {
 	res := app.Application.CheckTx(req)
 	return app.callback(

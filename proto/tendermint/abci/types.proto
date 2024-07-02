@@ -40,6 +40,8 @@ message Request {
     RequestProcessProposal    process_proposal     = 17;
     RequestBeginRecheckTx     begin_recheck_tx     = 100; // 16~99 are reserved for merging original tendermint
     RequestEndRecheckTx       end_recheck_tx       = 101;
+    //updated by mssong
+    RequestAnteVerifyTx       ante_verify_tx       = 102;
   }
 }
 
@@ -96,6 +98,10 @@ message RequestCheckTx {
 }
 
 message RequestDeliverTx {
+  bytes tx = 1;
+}
+
+message RequestAnteVerifyTx {
   bytes tx = 1;
 }
 
@@ -175,6 +181,8 @@ message Response {
     ResponseProcessProposal    process_proposal     = 18;
     ResponseBeginRecheckTx     begin_recheck_tx     = 100; // 17~99 are reserved for merging original tendermint
     ResponseEndRecheckTx       end_recheck_tx       = 101;
+    //updated by mssong
+    ResponseAnteVerifyTx       ante_verify_tx       = 102;
   }
 }
 
@@ -261,6 +269,11 @@ message ResponseDeliverTx {
     (gogoproto.jsontag)  = "events,omitempty"
   ];  // nondeterministic
   string codespace = 8;
+}
+
+message ResponseAnteVerifyTx {
+  uint32 code = 1;
+  string log =2;
 }
 
 message ResponseEndBlock {
@@ -465,4 +478,6 @@ service ABCIApplication {
   rpc ProcessProposal(RequestProcessProposal) returns (ResponseProcessProposal);
   rpc BeginRecheckTx(RequestBeginRecheckTx) returns (ResponseBeginRecheckTx);
   rpc EndRecheckTx(RequestEndRecheckTx) returns (ResponseEndRecheckTx);
+  //updated by mssong
+  rpc AnteVerifyTx(RequestAnteVerifyTx) returns (ResponseAnteVerifyTx);
 }

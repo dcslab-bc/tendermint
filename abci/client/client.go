@@ -64,6 +64,9 @@ type Client interface {
 	ApplySnapshotChunkSync(types.RequestApplySnapshotChunk) (*types.ResponseApplySnapshotChunk, error)
 	PrepareProposalSync(types.RequestPrepareProposal) (*types.ResponsePrepareProposal, error)
 	ProcessProposalSync(types.RequestProcessProposal) (*types.ResponseProcessProposal, error)
+
+	//updated by mssong
+	AnteVerifyTxAsync(types.RequestAnteVerifyTx) *ReqRes
 }
 
 //----------------------------------------
