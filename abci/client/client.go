@@ -9,7 +9,6 @@ import (
 	tmsync "github.com/tendermint/tendermint/libs/sync"
 )
 
-//go:generate mockery --case underscore --name Client
 const (
 	dialRetryIntervalSeconds = 3
 	echoRetryIntervalSeconds = 1
@@ -65,9 +64,6 @@ type Client interface {
 	ApplySnapshotChunkSync(types.RequestApplySnapshotChunk) (*types.ResponseApplySnapshotChunk, error)
 	PrepareProposalSync(types.RequestPrepareProposal) (*types.ResponsePrepareProposal, error)
 	ProcessProposalSync(types.RequestProcessProposal) (*types.ResponseProcessProposal, error)
-
-	//updated by mssong
-	AnteVerifyTxAsync(types.RequestAnteVerifyTx) *ReqRes
 }
 
 //----------------------------------------

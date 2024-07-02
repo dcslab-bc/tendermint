@@ -239,11 +239,6 @@ func (cli *socketClient) DeliverTxAsync(req types.RequestDeliverTx) *ReqRes {
 	return cli.queueRequest(types.ToRequestDeliverTx(req))
 }
 
-// mssong
-func (cli *socketClient) AnteVerifyTxAsync(req types.RequestAnteVerifyTx) *ReqRes {
-	return cli.queueRequest(types.ToRequestAnteVerifyTx(req))
-}
-
 func (cli *socketClient) CheckTxAsync(req types.RequestCheckTx) *ReqRes {
 	return cli.queueRequest(types.ToRequestCheckTx(req))
 }

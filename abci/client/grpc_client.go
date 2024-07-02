@@ -211,16 +211,6 @@ func (cli *grpcClient) DeliverTxAsync(params types.RequestDeliverTx) *ReqRes {
 	return cli.finishAsyncCall(req, &types.Response{Value: &types.Response_DeliverTx{DeliverTx: res}})
 }
 
-// updated by mssong
-func (cli *grpcClient) AnteVerifyTxAsync(params types.RequestAnteVerifyTx) *ReqRes {
-	req := types.ToRequestAnteVerifyTx(params)
-	res, err := cli.client.AnteVerifyTx(context.Background(), req.GetAnteVerifyTx(), grpc.WaitForReady(true))
-	if err != nil {
-		cli.StopForError(err)
-	}
-	return cli.finishAsyncCall(req, &types.Response{Value: &types.Response_AnteVerifyTx{AnteVerifyTx: res}})
-}
-
 func (cli *grpcClient) CheckTxAsync(params types.RequestCheckTx) *ReqRes {
 	req := types.ToRequestCheckTx(params)
 	res, err := cli.client.CheckTx(context.Background(), req.GetCheckTx(), grpc.WaitForReady(true))

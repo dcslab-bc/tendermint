@@ -33,9 +33,6 @@ type Application interface {
 	OfferSnapshot(RequestOfferSnapshot) ResponseOfferSnapshot                // Offer a snapshot to the application
 	LoadSnapshotChunk(RequestLoadSnapshotChunk) ResponseLoadSnapshotChunk    // Load a snapshot chunk
 	ApplySnapshotChunk(RequestApplySnapshotChunk) ResponseApplySnapshotChunk // Apply a shapshot chunk
-
-	//updated by mssong
-	AnteVerifyTx(RequestAnteVerifyTx) ResponseAnteVerifyTx // Verify a tx for full processing
 }
 
 //-------------------------------------------------------
@@ -60,10 +57,6 @@ func (BaseApplication) SetOption(req RequestSetOption) ResponseSetOption {
 
 func (BaseApplication) DeliverTx(req RequestDeliverTx) ResponseDeliverTx {
 	return ResponseDeliverTx{Code: CodeTypeOK}
-}
-
-func (BaseApplication) AnteVerifyTx(req RequestAnteVerifyTx) ResponseAnteVerifyTx {
-	return ResponseAnteVerifyTx{Code: CodeTypeOK}
 }
 
 func (BaseApplication) CheckTx(req RequestCheckTx) ResponseCheckTx {
@@ -153,11 +146,6 @@ func (app *GRPCApplication) SetOption(ctx context.Context, req *RequestSetOption
 
 func (app *GRPCApplication) DeliverTx(ctx context.Context, req *RequestDeliverTx) (*ResponseDeliverTx, error) {
 	res := app.app.DeliverTx(*req)
-	return &res, nil
-}
-
-func (app *GRPCApplication) AnteVerifyTx(ctx context.Context, req *RequestAnteVerifyTx) (*ResponseAnteVerifyTx, error) {
-	res := app.app.AnteVerifyTx(*req)
 	return &res, nil
 }
 
