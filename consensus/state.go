@@ -1841,7 +1841,7 @@ func (cs *State) defaultSetProposal(proposal *types.Proposal) error {
 		cs.ProposalBlockParts = types.NewPartSetFromHeader(proposal.BlockID.PartSetHeader)
 	}
 
-	cs.Logger.Info("received proposal", "proposal", proposal)
+	cs.Logger.Info("received proposal", "proposal", proposal, "timestamp:", time.Now().Format("15:04:05.000"))
 	return nil
 }
 
@@ -1900,7 +1900,7 @@ func (cs *State) addProposalBlockPart(msg *BlockPartMessage, peerID p2p.ID) (add
 		cs.ProposalBlock = block
 
 		// NOTE: it's possible to receive complete proposal blocks for future rounds without having the proposal
-		cs.Logger.Info("received complete proposal block", "height", cs.ProposalBlock.Height, "hash", cs.ProposalBlock.Hash())
+		cs.Logger.Info("received complete proposal block", "height", cs.ProposalBlock.Height, "hash", cs.ProposalBlock.Hash(), "timestamp:", time.Now().Format("15:04:05.000"))
 
 		if err := cs.eventBus.PublishEventCompleteProposal(cs.CompleteProposalEvent()); err != nil {
 			cs.Logger.Error("failed publishing event complete proposal", "err", err)
